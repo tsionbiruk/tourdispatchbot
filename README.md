@@ -188,4 +188,4 @@ Create a local `.env` file with the required credentials.
 
 ## Author
 
-Tsion Biruk
+Tsion Ephrem
