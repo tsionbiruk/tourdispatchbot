@@ -1,0 +1,21 @@
+2026-04-10 00:25:29 [[31merror[39m]: Error: An API error occurred: user_not_found
+    at platformErrorFromResult (C:\Users\Tsion\Documents\tour-dispatch-bot\node_modules\@slack\web-api\src\errors.ts:119:5)
+    at WebClient.apiCall (C:\Users\Tsion\Documents\tour-dispatch-bot\node_modules\@slack\web-api\src\WebClient.ts:405:36)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async sendOfferToGuide (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\slackService.ts:47:22)
+    at async advanceDispatchForTour (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\schedulerService.ts:109:38)
+    at async handleDecline (C:\Users\Tsion\Documents\tour-dispatch-bot\src\routes\slackInteractions.ts:180:3)
+    at async C:\Users\Tsion\Documents\tour-dispatch-bot\src\app.ts:75:3
+    at async Array.<anonymous> (C:\Users\Tsion\Documents\tour-dispatch-bot\node_modules\@slack\bolt\src\middleware\builtin.ts:223:5)
+    at async Array.onlyActions (C:\Users\Tsion\Documents\tour-dispatch-bot\node_modules\@slack\bolt\src\middleware\builtin.ts:78:5)
+    at async Promise.allSettled (index 1)
+2026-04-13 14:02:19 [[31merror[39m]: SqliteError: NOT NULL constraint failed: offers.tour_id
+    at createOffer (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\offerService.ts:85:23)
+    at advanceDispatchForTour (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\schedulerService.ts:106:32)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async Timeout.runSchedulerCycle [as _onTimeout] (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\schedulerService.ts:72:5)
+2026-04-16 20:18:19 [[31merror[39m]: SqliteError: NOT NULL constraint failed: offers.tour_id
+    at createOffer (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\offerService.ts:85:23)
+    at advanceDispatchForTour (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\schedulerService.ts:106:32)
+    at processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async Timeout.runSchedulerCycle [as _onTimeout] (C:\Users\Tsion\Documents\tour-dispatch-bot\src\services\schedulerService.ts:72:5)
