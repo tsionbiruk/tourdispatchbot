@@ -29,6 +29,7 @@ import path from 'path';
 import { logger } from '../utils/logger';
 import { ONE_HOUR_MS, fromNowMs } from '../utils/time';
 import { DispatchMode } from '../types/tour';
+import fs from 'fs';
 
 const DB_PATH = path.resolve(__dirname, '../../database/dispatch.db');
 
@@ -81,7 +82,10 @@ export type AcceptOfferResult =
  * Initialises (or opens) the SQLite database and ensures the schema is present.
  * Must be called once at application startup before any other offerService call.
  */
+
+
 export function initDb(): void {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
   db = new Database(DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
@@ -134,11 +138,10 @@ export function openDispatch(
   tourId: string,
   guideOffers: Array<{ guideId: string; slackUserId: string }>,
   dispatchMode: DispatchMode = 'all_guides',
-  manualGuideIds?: string[],
-  timeoutMs: number = ONE_HOUR_MS
+  manualGuideIds?: string[]
 ): number[] {
   const now = new Date().toISOString();
-  const expiresAt = fromNowMs(timeoutMs).toISOString();
+  const expiresAt = fromNowMs(ONE_HOUR_MS).toISOString();
   const manualGuideIdsJson =
     dispatchMode === 'manual_selection' && manualGuideIds?.length
       ? JSON.stringify(manualGuideIds)
@@ -201,9 +204,21 @@ export function tryAcceptOffer(offerId: number, guideId: string): AcceptOfferRes
 
   const transaction = db.transaction((): AcceptOfferResult => {
     // 1. Load and validate the offer
-    const offer = db
-      .prepare(`SELECT * FROM offers WHERE id = ?`)
-      .get(offerId) as Offer | undefined;
+    const offer = db.prepare(`
+      SELECT
+        id,
+        tour_id AS tourId,
+        guide_id AS guideId,
+        slack_user_id AS slackUserId,
+        slack_channel_id AS slackChannelId,
+        slack_message_ts AS slackMessageTs,
+        status,
+        created_at AS createdAt,
+        expires_at AS expiresAt,
+        responded_at AS respondedAt
+      FROM offers
+      WHERE id = ?
+    `).get(offerId) as Offer | undefined;
 
     if (!offer || offer.status !== 'pending') {
       return { success: false, reason: 'offer_not_pending' };
@@ -245,7 +260,19 @@ export function tryAcceptOffer(offerId: number, guideId: string): AcceptOfferRes
 
     const superseded = db
       .prepare(
-        `SELECT * FROM offers WHERE tour_id = ? AND status = 'superseded' AND responded_at = ? AND id != ?`
+        `SELECT
+        id,
+        tour_id AS tourId,
+        guide_id AS guideId,
+        slack_user_id AS slackUserId,
+        slack_channel_id AS slackChannelId,
+        slack_message_ts AS slackMessageTs,
+        status,
+        created_at AS createdAt,
+        expires_at AS expiresAt,
+        responded_at AS respondedAt
+      FROM offers
+      WHERE tour_id = ? AND status = 'superseded' AND responded_at = ? AND id != ?`
       )
       .all(offer.tourId, now, offerId) as Offer[];
 
@@ -386,10 +413,34 @@ export function getOfferById(offerId: number): Offer | undefined {
 export function getOffersForTour(tourId: string, status?: OfferStatus): Offer[] {
   if (status) {
     return db
-      .prepare(`SELECT * FROM offers WHERE tour_id = ? AND status = ?`)
+      .prepare(`SELECT
+      id,
+      tour_id AS tourId,
+      guide_id AS guideId,
+      slack_user_id AS slackUserId,
+      slack_channel_id AS slackChannelId,
+      slack_message_ts AS slackMessageTs,
+      status,
+      created_at AS createdAt,
+      expires_at AS expiresAt,
+      responded_at AS respondedAt
+    FROM offers
+    WHERE tour_id = ? AND status = ?`)
       .all(tourId, status) as Offer[];
   }
   return db
-    .prepare(`SELECT * FROM offers WHERE tour_id = ?`)
+    .prepare(`SELECT
+  id,
+  tour_id AS tourId,
+  guide_id AS guideId,
+  slack_user_id AS slackUserId,
+  slack_channel_id AS slackChannelId,
+  slack_message_ts AS slackMessageTs,
+  status,
+  created_at AS createdAt,
+  expires_at AS expiresAt,
+  responded_at AS respondedAt
+FROM offers
+WHERE tour_id = ?`)
     .all(tourId) as Offer[];
 }

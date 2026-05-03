@@ -13,24 +13,36 @@
  */
 
 import 'dotenv/config';
-import { WebClient } from '@slack/web-api';
 import express, { Request, Response, NextFunction } from 'express';
 import { App as BoltApp, ExpressReceiver } from '@slack/bolt';
 import { initDb } from './services/offerService';
 import { initSlack } from './services/slackService';
+import slackInteractionsRouter from './routes/slackInteractions';
 import { startScheduler } from './services/schedulerService';
 import { handleAccept, handleDecline } from './routes/slackInteractions';
 import mondayWebhookRouter from './routes/mondayWebhook';
-import slackInteractionsRouter from './routes/slackInteractions';
 import { SlackActionId, OfferMetadata } from './types/slack';
 import { logger } from './utils/logger';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
-const slackTestClient = new WebClient(process.env.SLACK_BOT_TOKEN || '');
 
 // ---------------------------------------------------------------------------
 // Slack Bolt — using ExpressReceiver so we can share the Express app
 // ---------------------------------------------------------------------------
+
+const requiredEnvVars = [
+  'SLACK_BOT_TOKEN',
+  'SLACK_SIGNING_SECRET',
+  'MONDAY_API_TOKEN',
+  'MONDAY_TOURS_BOARD_ID',
+  'MONDAY_TEAM_MEMBERS_BOARD_ID',
+];
+
+for (const key of requiredEnvVars) {
+  if (!process.env[key]) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+}
 
 const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET || '',
@@ -96,104 +108,19 @@ app.use(express.json({ verify: (req: Request & { rawBody?: Buffer }, _res, buf) 
   // Preserve raw body for monday.com signature verification
   req.rawBody = buf;
 }}));
+
+
 app.use(express.urlencoded({ extended: true }));
+app.use('/slack/interactions', slackInteractionsRouter);
 
 // Health check
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-import { openDispatch, updateOfferSlackMessage } from './services/offerService';
 
-app.get('/test-slack', async (_req, res) => {
-  try {
-    const slackUserId = 'U0ARED834HM';
-    const testTourId = 'test-tour-001';
-    const testGuideId = 'test-guide-001';
-
-    const offerIds = openDispatch(
-      testTourId,
-      [{ guideId: testGuideId, slackUserId }],
-      'manual_selection',
-      [testGuideId]
-    );
-
-    const offerId = offerIds[0];
-
-    if (!offerId) {
-      throw new Error('Failed to create test offer');
-    }
-
-    const openResult = await slackTestClient.conversations.open({
-      users: slackUserId,
-    });
-
-    const dmChannelId = openResult.channel?.id;
-    if (!dmChannelId) {
-      throw new Error('Could not open DM channel');
-    }
-
-    const postResult = await slackTestClient.chat.postMessage({
-      channel: dmChannelId,
-      text: 'New tour offer available',
-      blocks: [
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: '*New Tour Offer*\n*Tour:* Colosseum Night Tour\n*Date:* 2026-04-10\n*Time:* 19:00 - 21:00\n*Meeting Point:* Piazza Venezia',
-          },
-        },
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: 'Can you take this tour?',
-          },
-        },
-        {
-          type: 'actions',
-          elements: [
-            {
-              type: 'button',
-              text: { type: 'plain_text', text: 'Accept' },
-              style: 'primary',
-              action_id: 'accept_offer',
-              value: JSON.stringify({
-                offerId,
-                tourId: testTourId,
-                guideId: testGuideId,
-              }),
-            },
-            {
-              type: 'button',
-              text: { type: 'plain_text', text: 'Decline' },
-              style: 'danger',
-              action_id: 'decline_offer',
-              value: JSON.stringify({
-                offerId,
-                tourId: testTourId,
-                guideId: testGuideId,
-              }),
-            },
-          ],
-        },
-      ],
-    });
-
-    updateOfferSlackMessage(offerId, dmChannelId, postResult.ts as string);
-
-    res.json({ ok: true, offerId });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ ok: false, error: 'Failed to send Slack test message' });
-  }
-});
 // monday.com webhooks
 app.use('/webhooks/monday', mondayWebhookRouter);
-
-// Slack interactive components (fallback / non-Bolt path)
-app.use('/slack/interactions', slackInteractionsRouter);
 
 // Global error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

@@ -1,4 +1,7 @@
 node_modules/
 dist/
 .env
-.env.local
+logs/
+database/*.db
+database/*.db-shm
+database/*.db-wal

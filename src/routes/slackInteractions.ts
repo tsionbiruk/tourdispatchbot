@@ -39,7 +39,10 @@ import {
   confirmDeclineToGuide,
   notifyAdminChannel,
 } from '../services/slackService';
-import { updateTourWorkflowFields } from '../services/mondayService';
+import {
+  updateTourWorkflowFields,
+  getGuidesFromTeamBoard,
+} from '../services/mondayService';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -172,10 +175,17 @@ export async function handleAccept(
   // 3. Update monday.com
   try {
     await updateTourWorkflowFields(meta.tourId, {
-      assignedGuideId: meta.guideId,
+      dispatchStatus: 'Complete',
+      dispatchTrigger: 'Complete',
+    });
+
+    const acceptedGuides = await getGuidesFromTeamBoard([meta.guideId]);
+    const acceptedGuideName = acceptedGuides[0]?.name ?? meta.guideId;
+
+    await updateTourWorkflowFields(meta.tourId, {
+      assignedGuideName: acceptedGuideName,
       acceptedGuideId: meta.guideId,
       isAssigned: true,
-      status: 'Assigned',
     });
   } catch (err) {
     logger.error('[slackInteractions] Failed to update monday.com after acceptance:', err);

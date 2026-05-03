@@ -2,84 +2,95 @@
  * mondayService.ts
  *
  * All monday.com GraphQL interactions live here.
- * Methods are structured around the three relevant boards:
- *   - Tours board        (MONDAY_TOURS_BOARD_ID)
- *   - Availability board (MONDAY_AVAILABILITY_BOARD_ID)
- *   - Guide Info board   (MONDAY_GUIDE_INFO_BOARD_ID)
- *
- * Column IDs are read from environment variables — set them all in .env.
- * Methods marked [STUB] return realistic mock data during development and
- * must be replaced with real GraphQL queries before going to production.
- *
- * Dispatch trigger model (new):
- *   Guide search is NOT triggered by a status change to "Needed".
- *   It is triggered by a monday.com button column (or automation action)
- *   that fires a webhook whose event.type matches MONDAY_DISPATCH_TRIGGER_TYPE.
- *
- *   The webhook payload carries:
- *     event.type         — the trigger type (see MONDAY_DISPATCH_TRIGGER_TYPE)
- *     event.itemId       — the tour's monday.com item ID
- *     event.data         — optional JSON object embedded by the button context:
- *       dispatchMode     — "all_guides" | "manual_selection"
- *       manualGuideIds   — string[] (only when dispatchMode = "manual_selection")
- *
- *   If monday.com does not natively support embedding JSON in button context,
- *   the dispatchMode can instead be read from a dedicated dropdown column on
- *   the Tours board (MONDAY_TOUR_DISPATCH_MODE_COLUMN_ID) and the manual guide
- *   IDs from a people/text column (MONDAY_TOUR_MANUAL_GUIDES_COLUMN_ID).
- *   See parseTourDispatchColumns() below for that alternative.
  */
 
 import { Tour, DispatchMode } from '../types/tour';
-import { Guide, GuideAvailability } from '../types/guide';
+import { Guide } from '../types/guide';
 import { logger } from '../utils/logger';
 
 // ── Monday API config ─────────────────────────────────────────────────────────
 
 const MONDAY_API_URL = 'https://api.monday.com/v2';
-const MONDAY_TOKEN   = process.env.MONDAY_API_TOKEN || '';
+const MONDAY_TOKEN = process.env.MONDAY_API_TOKEN || '';
 
 // ── Board IDs ─────────────────────────────────────────────────────────────────
 
-const TOURS_BOARD_ID        = process.env.MONDAY_TOURS_BOARD_ID        || '';
-const AVAILABILITY_BOARD_ID = process.env.MONDAY_AVAILABILITY_BOARD_ID || '';
-const GUIDE_INFO_BOARD_ID   = process.env.MONDAY_GUIDE_INFO_BOARD_ID   || '';
+const TOURS_BOARD_ID = process.env.MONDAY_TOURS_BOARD_ID || '';
+const TEAM_MEMBERS_BOARD_ID = process.env.MONDAY_TEAM_MEMBERS_BOARD_ID || '';
+
+// ── Team Members board: column IDs ────────────────────────────────────────────
+
+const TEAM_MEMBER_SLACK_ID_COLUMN_ID =
+  process.env.MONDAY_TEAM_MEMBER_SLACK_ID_COLUMN_ID || 'slack_id';
+
+const TEAM_MEMBER_GUIDED_TOURS_COLUMN_ID =
+  process.env.MONDAY_TEAM_MEMBER_GUIDED_TOURS_COLUMN_ID || 'guided_tours';
+
+const TEAM_MEMBER_HOSTED_TOURS_COLUMN_ID =
+  process.env.MONDAY_TEAM_MEMBER_HOSTED_TOURS_COLUMN_ID || 'hosted_tours';
 
 // ── Tours board: input columns ────────────────────────────────────────────────
-// These are read by the webhook to determine how to dispatch.
 
-const DISPATCH_TRIGGER_COLUMN_ID    = process.env.MONDAY_DISPATCH_TRIGGER_COLUMN_ID    || 'dispatch_trigger';
-const TOUR_DISPATCH_MODE_COLUMN_ID  = process.env.MONDAY_TOUR_DISPATCH_MODE_COLUMN_ID  || 'dispatch_mode';
-const TOUR_MANUAL_GUIDES_COLUMN_ID  = process.env.MONDAY_TOUR_MANUAL_GUIDES_COLUMN_ID  || 'manual_guides';
+const TOUR_NAME_COLUMN_ID = process.env.MONDAY_TOUR_NAME_COLUMN_ID || '';
+const TOUR_DISPATCH_MODE_COLUMN_ID =
+  process.env.MONDAY_TOUR_DISPATCH_MODE_COLUMN_ID || 'dispatch_mode';
+const TOUR_MANUAL_GUIDES_COLUMN_ID =
+  process.env.MONDAY_SELECTED_GUIDES_COLUMN_ID ||
+  process.env.MONDAY_TOUR_MANUAL_GUIDES_COLUMN_ID ||
+  'manual_guides';
 
 // ── Tours board: output/metadata columns ──────────────────────────────────────
-// These are written back after dispatch actions.
 
-const TOUR_STATUS_COLUMN_ID         = process.env.MONDAY_TOUR_STATUS_COLUMN_ID         || 'status';
-const TOUR_START_COLUMN_ID          = process.env.MONDAY_TOUR_START_COLUMN_ID          || 'date';
-const TOUR_END_COLUMN_ID            = process.env.MONDAY_TOUR_END_COLUMN_ID            || 'date_end';
-const TOUR_TYPE_COLUMN_ID           = process.env.MONDAY_TOUR_TYPE_COLUMN_ID           || 'tour_type';
-const DISPATCH_STATUS_COLUMN_ID     = process.env.MONDAY_DISPATCH_STATUS_COLUMN_ID     || 'dispatch_status';
-const TOUR_ASSIGNED_GUIDE_COLUMN_ID = process.env.MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID || 'assigned_guide';
+const TOUR_STATUS_COLUMN_ID = process.env.MONDAY_TOUR_STATUS_COLUMN_ID || 'status';
+const TOUR_START_COLUMN_ID = process.env.MONDAY_TOUR_START_COLUMN_ID || 'date';
+const TOUR_END_COLUMN_ID = process.env.MONDAY_TOUR_END_COLUMN_ID || 'date_end';
+const TOUR_TYPE_COLUMN_ID = process.env.MONDAY_TOUR_TYPE_COLUMN_ID || 'tour_type';
+const DISPATCH_STATUS_COLUMN_ID =
+  process.env.MONDAY_DISPATCH_STATUS_COLUMN_ID || 'dispatch_status';
+const TOUR_ASSIGNED_GUIDE_COLUMN_ID =
+  process.env.MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID || 'assigned_guide';
+const ASSIGNED_GUIDE_COLUMN_ID = process.env.MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID;
+// ── Webhook trigger config ────────────────────────────────────────────────────
 
-// ── Webhook trigger type ──────────────────────────────────────────────────────
-
-/**
- * The monday.com event type string that indicates a manager clicked the
- * "Start Guide Search" button on a tour item.
- *
- * Common values:
- *   "ButtonClicked"    — native monday button column
- *   "ActionTriggered"  — monday automation action
- *
- * Set MONDAY_DISPATCH_TRIGGER_TYPE in .env to match your board configuration.
- */
 export const MONDAY_DISPATCH_TRIGGER_TYPE =
-  process.env.MONDAY_DISPATCH_TRIGGER_TYPE || 'ButtonClicked';
+  process.env.MONDAY_DISPATCH_TRIGGER_TYPE || 'update_column_value';
 
-// ── Generic GraphQL helper ────────────────────────────────────────────────────
+export const MONDAY_DISPATCH_TRIGGER_VALUE =
+  process.env.MONDAY_DISPATCH_TRIGGER_VALUE || 'Start Dispatch';
+
+const MONDAY_DISPATCH_TRIGGER_COLUMN_ID =
+  process.env.MONDAY_DISPATCH_TRIGGER_COLUMN_ID || '';
+
+interface MondayColumnChangeValue {
+  label?: {
+    text?: string;
+  };
+}
+
+type MondayColumnValue = {
+  id: string;
+  text: string | null;
+  value: string | null;
+};
+
+type MondayItem = {
+  id: string;
+  name: string;
+  column_values: MondayColumnValue[];
+};
+
+type TourReference = {
+  id?: string;
+  name?: string;
+};
+
+// ── Generic helpers ───────────────────────────────────────────────────────────
 
 async function mondayQuery<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+  if (!MONDAY_TOKEN) {
+    throw new Error('Missing MONDAY_API_TOKEN in .env');
+  }
+
   const response = await fetch(MONDAY_API_URL, {
     method: 'POST',
     headers: {
@@ -107,44 +118,162 @@ async function mondayQuery<T>(query: string, variables?: Record<string, unknown>
   return json.data;
 }
 
-// ── Webhook payload helpers ───────────────────────────────────────────────────
+function getColumnText(item: MondayItem, columnId: string): string {
+  if (!columnId) return '';
+  return item.column_values.find((c) => c.id === columnId)?.text?.trim() ?? '';
+}
 
-/**
- * Returns true if the webhook payload represents a dispatch trigger event.
- *
- * Matches on either:
- *   a) event.type === MONDAY_DISPATCH_TRIGGER_TYPE  (button click)
- *   b) event.columnId === DISPATCH_TRIGGER_COLUMN_ID (column-change fallback)
- */
-export function isDispatchTriggerEvent(payload: unknown): boolean {
-  const event = (payload as Record<string, unknown>)?.event as
-    | Record<string, unknown>
-    | undefined;
+function getColumnValue(item: MondayItem, columnId: string): string | null {
+  if (!columnId) return null;
+  return item.column_values.find((c) => c.id === columnId)?.value ?? null;
+}
 
-  if (!event) return false;
+function normalise(value: string): string {
+  return value.trim().toLowerCase();
+}
 
-  if (event.type === MONDAY_DISPATCH_TRIGGER_TYPE) return true;
+function isNumericId(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
 
-  if (
-    event.columnId !== undefined &&
-    String(event.columnId) === DISPATCH_TRIGGER_COLUMN_ID
-  ) {
-    return true;
+function splitCommaSeparated(text?: string | null): string[] {
+  if (!text) return [];
+  return text
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseDateColumn(rawValue: string | null, fallbackIso: string): string {
+  if (!rawValue) return fallbackIso;
+
+  try {
+    const parsed = JSON.parse(rawValue) as {
+      date?: string;
+      time?: string;
+      from?: string;
+      to?: string;
+    };
+
+    if (parsed.date && parsed.time) return `${parsed.date}T${parsed.time}:00`;
+    if (parsed.date) return `${parsed.date}T00:00:00`;
+    if (parsed.from) return parsed.from;
+    if (parsed.to) return parsed.to;
+  } catch {
+    // Ignore invalid JSON and use fallback.
   }
 
-  return false;
+  return fallbackIso;
 }
 
 /**
- * Extracts the tour item ID from a monday.com webhook payload.
+ * Parses the manager's manual guide selection column.
  *
- * Handles the three field name variants monday uses across different event types:
- *   event.itemId   — most common
- *   event.pulseId  — legacy board webhooks
- *   event.item_id  — some automation payloads
- *
- * Returns null if no item ID can be found.
+ * Supports:
+ * - comma-separated guide names from a plain text column
+ * - comma-separated Monday item IDs
+ * - Monday People column JSON
+ * - Monday Connect Boards-style JSON
  */
+function parseManualGuideIdentifiers(
+  rawValue: string | null | undefined,
+  columnText?: string | null
+): string[] {
+  const values = new Set<string>();
+
+  const addText = (text?: string | null) => {
+    splitCommaSeparated(text).forEach((value) => values.add(value));
+  };
+
+  if (rawValue) {
+    try {
+      const parsed = JSON.parse(rawValue) as {
+        text?: string;
+        personsAndTeams?: { id: string | number }[];
+        linkedPulseIds?: { linkedPulseId: string | number }[];
+        item_ids?: Array<string | number>;
+      };
+
+      if (parsed.text) addText(parsed.text);
+
+      if (Array.isArray(parsed.personsAndTeams)) {
+        parsed.personsAndTeams.forEach((p) => values.add(String(p.id)));
+      }
+
+      if (Array.isArray(parsed.linkedPulseIds)) {
+        parsed.linkedPulseIds.forEach((p) => values.add(String(p.linkedPulseId)));
+      }
+
+      if (Array.isArray(parsed.item_ids)) {
+        parsed.item_ids.forEach((id) => values.add(String(id)));
+      }
+    } catch {
+      addText(rawValue);
+    }
+  }
+
+  addText(columnText);
+
+  return Array.from(values).filter(Boolean);
+}
+
+function parseDispatchMode(text?: string | null): DispatchMode {
+  const value = normalise(text ?? '');
+
+  if (
+    value === 'manual_selection' ||
+    value === 'manual selection' ||
+    value === 'selected guides' ||
+    value === 'selected guide' ||
+    value === 'manual' ||
+    value === 'select guides'
+  ) {
+    return 'manual_selection';
+  }
+
+  return 'all_guides';
+}
+
+// ── Webhook payload helpers ───────────────────────────────────────────────────
+
+export function isDispatchTriggerEvent(payload: unknown): boolean {
+  const maybePayload = payload as Record<string, unknown>;
+
+  // Supports BOTH:
+  // 1. full payload: { event: {...} }
+  // 2. direct event object: {...}
+  const event = (maybePayload.event ?? maybePayload) as Record<string, unknown> | undefined;
+
+  if (!event) return false;
+
+  const expectedColumnId = process.env.MONDAY_DISPATCH_TRIGGER_COLUMN_ID;
+  const expectedLabel =
+    process.env.MONDAY_DISPATCH_TRIGGER_VALUE || 'Start Dispatch';
+
+  if (event.type !== 'update_column_value') return false;
+
+  const columnId = String(event.columnId ?? '');
+  const columnTitle = String(event.columnTitle ?? '');
+
+  const isCorrectColumn =
+    columnTitle === 'Dispatch Trigger' ||
+    (!!expectedColumnId && columnId === expectedColumnId);
+
+  if (!isCorrectColumn) return false;
+
+  const value = event.value as
+    | {
+        label?: {
+          text?: string;
+        };
+      }
+    | undefined;
+
+  const label = value?.label?.text ?? '';
+
+  return label === expectedLabel;
+}
+
 export function getWebhookItemId(payload: unknown): string | null {
   const event = (payload as Record<string, unknown>)?.event as
     | Record<string, unknown>
@@ -152,166 +281,191 @@ export function getWebhookItemId(payload: unknown): string | null {
 
   if (!event) return null;
 
-  const raw =
-    event.itemId ??
-    event.pulseId ??
-    event.item_id ??
-    '';
-
+  const raw = event.itemId ?? event.pulseId ?? event.item_id ?? '';
   const id = String(raw).trim();
   return id || null;
 }
 
 // ── Tours board ───────────────────────────────────────────────────────────────
 
-/**
- * Fetches a single tour item from the Tours board by item ID.
- *
- * [STUB] Returns mock data. Replace with real GraphQL, e.g.:
- *
- *   const data = await mondayQuery<{
- *     items: { id: string; name: string; column_values: { id: string; text: string; value: string }[] }[]
- *   }>(`
- *     query {
- *       items(ids: [${itemId}]) {
- *         id
- *         name
- *         column_values {
- *           id
- *           text
- *           value
- *         }
- *       }
- *     }
- *   `);
- *   return mapMondayItemToTour(data.items[0]);
- */
 export async function getTourById(itemId: string): Promise<Tour> {
   logger.info(`[mondayService] Fetching tour item ${itemId}`);
 
-  // [STUB] — replace with real query + mapMondayItemToTour()
-  return {
-    id: itemId,
-    name: 'Mock Tour Name',
-    startTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-    endTime: new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString(),
-    tourType: 'walking',
-    status: 'Available',
-    isAssigned: false,
-    assignedGuideId: undefined,
+  const requestedColumnIds = [
+    TOUR_NAME_COLUMN_ID,
+    TOUR_START_COLUMN_ID,
+    TOUR_END_COLUMN_ID,
+    TOUR_TYPE_COLUMN_ID,
+    TOUR_STATUS_COLUMN_ID,
+    TOUR_ASSIGNED_GUIDE_COLUMN_ID,
+  ].filter(Boolean);
+
+  const columnIdsGql = requestedColumnIds.map((id) => `"${id}"`).join(', ');
+
+  const data = await mondayQuery<{ items: MondayItem[] }>(`
+    query {
+      items(ids: [${itemId}]) {
+        id
+        name
+        column_values(ids: [${columnIdsGql}]) {
+          id
+          text
+          value
+          ... on BoardRelationValue {
+            linked_item_ids
+            linked_items {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  `);
+
+  const item = data.items?.[0];
+
+  if (!item) {
+    throw new Error(`[mondayService] Tour item ${itemId} not found`);
+  }
+
+  const nameFromColumn = getColumnText(item, TOUR_NAME_COLUMN_ID);
+  const tourTypeFromColumn = getColumnText(item, TOUR_TYPE_COLUMN_ID);
+  const statusFromColumn = getColumnText(item, TOUR_STATUS_COLUMN_ID);
+  const assignedGuideFromColumn = getColumnText(item, TOUR_ASSIGNED_GUIDE_COLUMN_ID);
+
+  const tourName = nameFromColumn || tourTypeFromColumn || item.name;
+  const startFallback = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const endFallback = new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString();
+
+  const tour: Tour = {
+    id: item.id,
+    name: tourName,
+    startTime: parseDateColumn(getColumnValue(item, TOUR_START_COLUMN_ID), startFallback),
+    endTime: parseDateColumn(getColumnValue(item, TOUR_END_COLUMN_ID), endFallback),
+    tourType: tourTypeFromColumn || tourName,
+    status: statusFromColumn || 'Available',
+    isAssigned: Boolean(assignedGuideFromColumn),
+    assignedGuideId: assignedGuideFromColumn || undefined,
     acceptedGuideId: undefined,
     dispatchMode: undefined,
     manualGuideIds: undefined,
   };
+
+  logger.info(`[mondayService] Tour loaded: ${JSON.stringify({ id: tour.id, name: tour.name })}`);
+
+  return tour;
 }
 
-/**
- * Reads dispatch configuration directly from a tour's board columns.
- *
- * Use this when dispatch mode and manual guide IDs are stored as column values
- * on the Tours board rather than being embedded in the button click payload.
- *
- * Returns:
- *   dispatchMode    — parsed from MONDAY_TOUR_DISPATCH_MODE_COLUMN_ID
- *   manualGuideIds  — parsed from MONDAY_TOUR_MANUAL_GUIDES_COLUMN_ID (may be [])
- *
- * [STUB] Returns mock values. Replace with real GraphQL query.
- */
 export async function parseTourDispatchColumns(itemId: string): Promise<{
   dispatchMode: DispatchMode;
   manualGuideIds: string[];
 }> {
   logger.info(`[mondayService] Reading dispatch columns for tour ${itemId}`);
 
-  // [STUB] — replace with:
-  //
-  // const data = await mondayQuery<{
-  //   items: { column_values: { id: string; text: string; value: string }[] }[]
-  // }>(`
-  //   query {
-  //     items(ids: [${itemId}]) {
-  //       column_values(ids: [
-  //         "${TOUR_DISPATCH_MODE_COLUMN_ID}",
-  //         "${TOUR_MANUAL_GUIDES_COLUMN_ID}"
-  //       ]) {
-  //         id text value
-  //       }
-  //     }
-  //   }
-  // `);
-  //
-  // const cols = data.items[0].column_values;
-  // const modeCol   = cols.find((c) => c.id === TOUR_DISPATCH_MODE_COLUMN_ID);
-  // const guidesCol = cols.find((c) => c.id === TOUR_MANUAL_GUIDES_COLUMN_ID);
-  //
-  // const dispatchMode: DispatchMode =
-  //   modeCol?.text === 'manual_selection' ? 'manual_selection' : 'all_guides';
-  //
-  // const manualGuideIds: string[] =
-  //   dispatchMode === 'manual_selection'
-  //     ? parseManualGuideIds(guidesCol?.value ?? null)
-  //     : [];
-  //
-  // return { dispatchMode, manualGuideIds };
+  const requestedColumnIds = [
+    TOUR_DISPATCH_MODE_COLUMN_ID,
+    TOUR_MANUAL_GUIDES_COLUMN_ID,
+  ].filter(Boolean);
 
-  return { dispatchMode: 'all_guides', manualGuideIds: [] };
+  const columnIdsGql = requestedColumnIds.map((id) => `"${id}"`).join(', ');
+
+  const data = await mondayQuery<{ items: MondayItem[] }>(`
+    query {
+      items(ids: [${itemId}]) {
+        id
+        name
+        column_values(ids: [${columnIdsGql}]) {
+          id
+          text
+          value
+          ... on BoardRelationValue {
+            linked_item_ids
+            linked_items {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+  `);
+
+  const item = data.items?.[0];
+
+  if (!item) {
+    throw new Error(`[mondayService] Tour item ${itemId} not found while reading dispatch columns`);
+  }
+  logger.info(
+  `[mondayService] RAW dispatch column values for tour ${itemId}: ${JSON.stringify(item.column_values, null, 2)}`
+);
+  const modeText = getColumnText(item, TOUR_DISPATCH_MODE_COLUMN_ID);
+  const guidesText = getColumnText(item, TOUR_MANUAL_GUIDES_COLUMN_ID);
+  const guidesValue = getColumnValue(item, TOUR_MANUAL_GUIDES_COLUMN_ID);
+
+  logger.info(
+  `[mondayService] Selected guides debug: envColumnId=${TOUR_MANUAL_GUIDES_COLUMN_ID}, text=${guidesText}, value=${guidesValue}`
+  );
+  const guidesColumn = item.column_values.find(
+  (c: any) => c.id === TOUR_MANUAL_GUIDES_COLUMN_ID
+  ) as any;
+
+  const manualGuideIds =
+    Array.isArray(guidesColumn?.linked_item_ids) && guidesColumn.linked_item_ids.length > 0
+      ? guidesColumn.linked_item_ids.map(String)
+      : parseManualGuideIdentifiers(guidesValue, guidesText);
+  const dispatchMode = manualGuideIds.length > 0 ? 'manual_selection' : parseDispatchMode(modeText);
+
+  logger.info(
+    `[mondayService] Dispatch config for tour ${itemId}: mode=${dispatchMode}, manualSelections=${JSON.stringify(manualGuideIds)}`
+  );
+
+  return { dispatchMode, manualGuideIds };
 }
 
 /**
- * Parses a raw monday.com column value for a people/text column into guide IDs.
- *
- * Supports two formats:
- *   1. People column JSON: { "personsAndTeams": [{ "id": "123" }] }
- *   2. Plain text: comma-separated IDs, e.g. "guide_001,guide_002"
- *
- * Returns an empty array on any parse failure — the caller should treat this
- * as "no guides selected" and fall back to 'all_guides' mode or notify admin.
+ * Kept as an export for any older imports in your project.
  */
 export function parseManualGuideIds(rawValue: string | null): string[] {
-  if (!rawValue) return [];
+  return parseManualGuideIdentifiers(rawValue);
+}
 
-  try {
-    const parsed = JSON.parse(rawValue) as {
-      personsAndTeams?: { id: string }[];
-    };
-    if (Array.isArray(parsed.personsAndTeams)) {
-      return parsed.personsAndTeams.map((p) => String(p.id)).filter(Boolean);
+// ── Team Members board: column parsers ────────────────────────────────────────
+
+function parseTourReferenceColumn(
+  rawValue: string | null | undefined,
+  columnText: string | null | undefined
+): TourReference[] {
+  if (rawValue) {
+    try {
+      const parsed = JSON.parse(rawValue) as {
+        linkedPulseIds?: { linkedPulseId: number }[];
+      };
+      if (Array.isArray(parsed.linkedPulseIds) && parsed.linkedPulseIds.length > 0) {
+        return parsed.linkedPulseIds.map((lp) => ({
+          id: String(lp.linkedPulseId),
+        }));
+      }
+    } catch {
+      // Not valid JSON — fall through to dropdown/text parsing.
     }
-  } catch {
-    // Not JSON — try comma-separated plain text
-    return rawValue
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
   }
 
-  return [];
+  return splitCommaSeparated(columnText).map((name) => ({ name }));
 }
 
 // ── Tours board: write helpers ────────────────────────────────────────────────
 
-/**
- * Updates one or more workflow fields on the Tours board.
- *
- * Writes to distinct columns depending on the field:
- *   status          → MONDAY_TOUR_STATUS_COLUMN_ID       (tour lifecycle status)
- *   dispatchStatus  → MONDAY_DISPATCH_STATUS_COLUMN_ID   (dispatch pipeline status)
- *   assignedGuideId → MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID
- *
- * Note: status and dispatchStatus intentionally map to DIFFERENT columns.
- *   - status         reflects the tour lifecycle ("Available", "Assigned", …)
- *   - dispatchStatus reflects the dispatch pipeline ("Dispatching", "No eligible guides", …)
- *
- * [STUB] Logs intent; replace body with real GraphQL mutation.
- */
 export async function updateTourWorkflowFields(
   itemId: string,
   fields: {
     assignedGuideId?: string;
+    assignedGuideName?: string;
     acceptedGuideId?: string;
     isAssigned?: boolean;
     status?: string;
     dispatchStatus?: string;
+    dispatchTrigger?: string;
     dispatchMode?: DispatchMode;
   }
 ): Promise<void> {
@@ -319,47 +473,36 @@ export async function updateTourWorkflowFields(
     `[mondayService] Updating tour ${itemId} fields: ${JSON.stringify(fields)}`
   );
 
-  // [STUB] — replace with:
-  //
-  // const columnValues: Record<string, unknown> = {};
-  //
-  // if (fields.status !== undefined) {
-  //   columnValues[TOUR_STATUS_COLUMN_ID] = { label: fields.status };
-  // }
-  // if (fields.dispatchStatus !== undefined) {
-  //   columnValues[DISPATCH_STATUS_COLUMN_ID] = { label: fields.dispatchStatus };
-  // }
-  // if (fields.assignedGuideId !== undefined) {
-  //   columnValues[TOUR_ASSIGNED_GUIDE_COLUMN_ID] = {
-  //     item_ids: [Number(fields.assignedGuideId)],
-  //   };
-  // }
-  //
-  // if (Object.keys(columnValues).length === 0) return;
-  //
-  // await mondayQuery(`
-  //   mutation {
-  //     change_multiple_column_values(
-  //       board_id: ${TOURS_BOARD_ID},
-  //       item_id: ${itemId},
-  //       column_values: ${JSON.stringify(JSON.stringify(columnValues))}
-  //     ) { id }
-  //   }
-  // `);
+  const columnValues: Record<string, unknown> = {};
+
+  if (fields.status !== undefined) {
+    columnValues[TOUR_STATUS_COLUMN_ID] = { label: fields.status };
+  }
+  if (fields.dispatchStatus !== undefined) {
+    columnValues[DISPATCH_STATUS_COLUMN_ID] = { label: fields.dispatchStatus };
+  }
+  if (fields.dispatchTrigger !== undefined && MONDAY_DISPATCH_TRIGGER_COLUMN_ID) {
+  columnValues[MONDAY_DISPATCH_TRIGGER_COLUMN_ID] = {
+    label: fields.dispatchTrigger,
+  };
+}
+  if (fields.assignedGuideName !== undefined && ASSIGNED_GUIDE_COLUMN_ID) {
+  columnValues[ASSIGNED_GUIDE_COLUMN_ID] = fields.assignedGuideName;
 }
 
-/**
- * Sets the dispatch pipeline status column on the Tours board.
- *
- * Expected status strings (match your monday Status column labels exactly):
- *   "Dispatching"        — offers are live in Slack
- *   "No eligible guides" — no qualified/available guides found
- *   "Dispatch failed"    — Slack sends failed entirely
- *   "Assigned"           — a guide accepted (written by the accept handler)
- *
- * This writes to MONDAY_DISPATCH_STATUS_COLUMN_ID, NOT to the tour lifecycle
- * status column (MONDAY_TOUR_STATUS_COLUMN_ID).
- */
+  if (Object.keys(columnValues).length === 0) return;
+
+  await mondayQuery(`
+    mutation {
+      change_multiple_column_values(
+        board_id: ${TOURS_BOARD_ID},
+        item_id: ${itemId},
+        column_values: ${JSON.stringify(JSON.stringify(columnValues))}
+      ) { id }
+    }
+  `);
+}
+
 export async function updateDispatchStatus(
   itemId: string,
   dispatchStatus: string
@@ -367,14 +510,6 @@ export async function updateDispatchStatus(
   return updateTourWorkflowFields(itemId, { dispatchStatus });
 }
 
-/**
- * Marks a tour as assigned to a specific guide.
- *
- * Sets:
- *   assignedGuideId → MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID
- *   status          → "Assigned"  (tour lifecycle status column)
- *   dispatchStatus  → "Assigned"  (dispatch pipeline status column)
- */
 export async function updateAssignedGuide(
   itemId: string,
   assignedGuideId: string
@@ -383,70 +518,136 @@ export async function updateAssignedGuide(
     assignedGuideId,
     isAssigned: true,
     status: 'Assigned',
-    dispatchStatus: 'Assigned',
+    dispatchStatus: 'Complete',
+    dispatchTrigger: 'Complete',
   });
 }
 
-// ── Availability board ────────────────────────────────────────────────────────
+// ── Team Members board ────────────────────────────────────────────────────────
 
-/**
- * Fetches all availability windows for a specific guide.
- * [STUB] Returns a single wide-open window. Replace with real query.
- */
-export async function getGuideAvailability(guideId: string): Promise<GuideAvailability[]> {
-  logger.info(`[mondayService] Fetching availability for guide ${guideId}`);
+export async function getGuidesFromTeamBoard(manualGuideIds?: string[]): Promise<Guide[]> {
+  const hasManualSelections = Array.isArray(manualGuideIds) && manualGuideIds.length > 0;
+  const manualSelections = hasManualSelections ? manualGuideIds! : [];
+  const manualSelectionsAreItemIds = manualSelections.length > 0 && manualSelections.every(isNumericId);
 
-  // [STUB]
-  return [
-    {
-      guideId,
-      availableFrom: new Date(Date.now()).toISOString(),
-      availableTo: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-    },
+  logger.info(
+    hasManualSelections
+      ? `[mondayService] Fetching manually selected guide(s): ${JSON.stringify(manualSelections)}`
+      : '[mondayService] Fetching all guides from Team Members board'
+  );
+
+  const columnIds = [
+    TEAM_MEMBER_SLACK_ID_COLUMN_ID,
+    TEAM_MEMBER_GUIDED_TOURS_COLUMN_ID,
+    TEAM_MEMBER_HOSTED_TOURS_COLUMN_ID,
   ];
-}
+  const columnIdsGql = columnIds.map((id) => `"${id}"`).join(', ');
 
-// ── Guide Info board ──────────────────────────────────────────────────────────
+  const query = manualSelectionsAreItemIds
+    ? `
+        query {
+          items(ids: [${manualSelections.join(', ')}]) {
+            id
+            name
+            column_values(ids: [${columnIdsGql}]) {
+              id
+              text
+              value
+            }
+          }
+        }
+      `
+    : `
+        query {
+          boards(ids: [${TEAM_MEMBERS_BOARD_ID}]) {
+            items_page(limit: 500) {
+              items {
+                id
+                name
+                column_values(ids: [${columnIdsGql}]) {
+                  id
+                  text
+                  value
+                }
+              }
+            }
+          }
+        }
+      `;
 
-/**
- * Fetches all active guides from the Guide Info board.
- * [STUB] Returns two mock guides. Replace with real query + pagination.
- */
-export async function getAllActiveGuides(): Promise<Guide[]> {
-  logger.info('[mondayService] Fetching all active guides');
+  let items: MondayItem[];
 
-  // [STUB]
-  return [
-    {
-      id: 'guide_001',
-      name: 'Alice Romano',
-      slackUserId: 'U00000001',
-      email: 'alice@example.com',
-      isActive: true,
-      qualifications: ['walking', 'bus'],
-      rankingScore: 90,
-      hadCancellationThisMonth: true,
-    },
-    {
-      id: 'guide_002',
-      name: 'Marco Bianchi',
-      slackUserId: 'U00000002',
-      email: 'marco@example.com',
-      isActive: true,
-      qualifications: ['walking'],
-      rankingScore: 85,
-      hadCancellationThisMonth: false,
-    },
-  ];
-}
+  if (manualSelectionsAreItemIds) {
+    const data = await mondayQuery<{ items: MondayItem[] }>(query);
+    items = data.items ?? [];
+  } else {
+    const data = await mondayQuery<{
+      boards: { items_page: { items: MondayItem[] } }[];
+    }>(query);
+    items = data.boards?.[0]?.items_page?.items ?? [];
+  }
 
-/**
- * Fetches tours currently assigned to a guide (to detect scheduling conflicts).
- * [STUB] Returns empty list. Replace with real filtered query.
- */
-export async function getAssignedToursForGuide(guideId: string): Promise<Tour[]> {
-  logger.info(`[mondayService] Fetching assigned tours for guide ${guideId}`);
+  if (hasManualSelections && !manualSelectionsAreItemIds) {
+    const selectedNames = new Set(manualSelections.map(normalise));
+    items = items.filter((item) => selectedNames.has(normalise(item.name)));
 
-  // [STUB]
-  return [];
+    logger.info(
+      `[mondayService] Matched ${items.length}/${manualSelections.length} manually typed guide name(s) from Team Members board`
+    );
+  }
+
+  const guides: Guide[] = items
+    .map((item) => {
+      const slackIdCol = item.column_values.find(
+        (c) => c.id === TEAM_MEMBER_SLACK_ID_COLUMN_ID
+      );
+      const slackUserId = slackIdCol?.text?.trim() ?? '';
+
+      if (!slackUserId) {
+        logger.warn(
+          `[mondayService] Team member "${item.name}" (id: ${item.id}) has no Slack ID — skipping`
+        );
+        return null;
+      }
+
+      const guidedToursCol = item.column_values.find(
+        (c) => c.id === TEAM_MEMBER_GUIDED_TOURS_COLUMN_ID
+      );
+      const hostedToursCol = item.column_values.find(
+        (c) => c.id === TEAM_MEMBER_HOSTED_TOURS_COLUMN_ID
+      );
+
+      const guide = {
+        id: item.id,
+        name: item.name,
+        slackUserId,
+        guidedTours: parseTourReferenceColumn(
+          guidedToursCol?.value,
+          guidedToursCol?.text
+        ),
+        hostedTours: parseTourReferenceColumn(
+          hostedToursCol?.value,
+          hostedToursCol?.text
+        ),
+      } as Guide;
+
+      return guide;
+    })
+    .filter((g): g is Guide => g !== null);
+
+  logger.info(`[mondayService] ${guides.length} guide(s) fetched from Team Members board`);
+
+  logger.debug(
+    `[mondayService] Guide sample: ${JSON.stringify(
+      guides.slice(0, 5).map((guide) => ({
+        id: guide.id,
+        name: guide.name,
+        slackUserId: guide.slackUserId,
+        guidedTours: (guide as Guide & { guidedTours?: TourReference[] }).guidedTours,
+        hostedTours: (guide as Guide & { hostedTours?: TourReference[] }).hostedTours,
+      }))
+    )}`
+  );
+
+  return guides;
 }

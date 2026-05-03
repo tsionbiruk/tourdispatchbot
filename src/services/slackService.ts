@@ -30,6 +30,7 @@ import { Tour } from '../types/tour';
 import { Guide } from '../types/guide';
 import { formatForSlack } from '../utils/time';
 import { logger } from '../utils/logger';
+import { updateTourWorkflowFields } from './mondayService';
 
 let boltApp: BoltApp;
 
@@ -109,12 +110,22 @@ export async function sendOffersToAllGuides(
   tour: Tour,
   offerMetaList: OfferMetadata[]
 ): Promise<PromiseSettledResult<{ guideId: string; channelId: string; messageTs: string }>[]> {
-  return Promise.allSettled(
+  const results = await Promise.allSettled(
     guides.map(async (guide, i) => {
       const { channelId, messageTs } = await sendOfferToGuide(guide, tour, offerMetaList[i]);
       return { guideId: guide.id, channelId, messageTs };
     })
   );
+
+  const sentCount = results.filter((result) => result.status === 'fulfilled').length;
+
+  if (sentCount > 0) {
+    await updateTourWorkflowFields(tour.id, {
+      dispatchStatus: 'Message sent',
+    });
+  }
+
+  return results;
 }
 
 // ── Message updates ───────────────────────────────────────────────────────────
@@ -285,7 +296,6 @@ function buildActiveOfferBlocks(tour: Tour, metadataStr: string): (KnownBlock | 
           `*Type:* ${tour.tourType}\n` +
           `*Start:* ${formatForSlack(new Date(tour.startTime))}\n` +
           `*End:* ${formatForSlack(new Date(tour.endTime))}\n\n` +
-          `This offer is open to multiple guides — first to accept gets the tour.` +
           `This offer is open to multiple guides — first to accept gets the tour.`,
       },
     },
