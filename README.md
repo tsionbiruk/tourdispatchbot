@@ -216,7 +216,6 @@ https://your-ngrok-url/slack/interactions
 This endpoint handles all button interactions such as Accept and Decline.
 
 ---
----
 
 ## Testing
 
@@ -235,7 +234,6 @@ To verify the integration:
 
 ---
 
----
 
 ## Notes
 
