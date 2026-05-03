@@ -264,18 +264,26 @@ export async function markOfferAlreadyAssigned(
  * Posts a notification message to the configured admin / ops Slack channel.
  */
 export async function notifyAdminChannel(message: string): Promise<void> {
-  const adminChannel = process.env.SLACK_ADMIN_CHANNEL_ID || '';
-  if (!adminChannel) {
-    logger.warn('[slackService] SLACK_ADMIN_CHANNEL_ID not set — skipping admin notification');
+  const adminChannels = (process.env.SLACK_ADMIN_CHANNEL_IDS || '')
+    .split(',')
+    .map(id => id.trim())
+    .filter(Boolean);
+
+  if (adminChannels.length === 0) {
+    logger.warn('[slackService] SLACK_ADMIN_CHANNEL_IDS not set — skipping admin notification');
     return;
   }
 
-  logger.info(`[slackService] Notifying admin channel`);
+  logger.info(`[slackService] Notifying ${adminChannels.length} admin(s)`);
 
-  await boltApp.client.chat.postMessage({
-    channel: adminChannel,
-    text: message,
-  });
+  await Promise.all(
+    adminChannels.map(channel =>
+      boltApp.client.chat.postMessage({
+        channel,
+        text: message,
+      })
+    )
+  );
 }
 
 // ── Block Kit helpers ─────────────────────────────────────────────────────────
