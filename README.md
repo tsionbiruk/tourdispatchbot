@@ -17,15 +17,25 @@ The system integrates three main components:
 1. A manager initiates a dispatch from the Tour board in Monday.com
 2. The backend receives a webhook event
 3. The system:
-
    * retrieves tour details
    * determines dispatch mode
-   * selects eligible guides
+   * selects eligible guides (based on tours/hosts + manual selection if applicable)
 4. Slack messages are sent to the selected guides
 5. The first guide to accept is assigned
-6. The Monday board is updated with dispatch results
+6. Other guides attempting to accept will receive a "tour already assigned" response
+7. The Monday board is updated with:
+   * Assigned guide
+   * Dispatch status
+   * Dispatch results/logs
 
 ---
+
+## System Architecture
+
+Monday.com → Backend → Slack → Backend → Monday.com
+
+---
+
 
 ## Project Structure
 
@@ -74,6 +84,8 @@ MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID=
 SLACK_BOT_TOKEN=
 SLACK_SIGNING_SECRET=
 SLACK_APP_TOKEN=
+
+PORT=3000
 ```
 
 Do not commit the `.env` file to version control.
@@ -92,11 +104,61 @@ npm install
 
 ## Running the Application
 
+### Development Mode
+
 Start the development server:
 
 ```
 npm run dev
 ```
+Server runs on:
+
+```
+http://localhost:3000
+```
+---
+
+### Production Mode
+
+Build the project:
+
+```
+npm run build
+```
+Start the production server:
+```
+npm start
+```
+
+
+---
+
+## Deployment
+
+The application is currently tested locally using ngrok. For production use, it should be deployed on a persistent server.
+
+### Deployment Requirements
+
+- Node.js (v18 or higher recommended)
+- A publicly accessible HTTPS endpoint
+- Environment variables configured on the server
+- Persistent storage for the `database/` folder
+
+### Running in Production
+
+It is recommended to run the service using a process manager such as:
+
+- PM2
+- Docker
+- systemd
+
+This ensures the service remains active and automatically restarts if it crashes.
+
+### Important Notes
+
+- The backend must be accessible via a public URL for webhook integrations
+- Replace ngrok with the company’s server endpoint in production
+- Ensure environment variables are securely stored on the server
 
 ---
 
@@ -128,7 +190,32 @@ mutation {
   }
 }
 ```
+---
 
+## Slack Setup
+
+To enable Slack interactions:
+
+1. Go to your Slack app settings  
+2. Navigate to **Interactivity & Shortcuts**  
+3. Enable interactivity  
+4. Set the Request URL to:
+
+```
+https://your-domain/slack/interactions
+```
+
+For local testing, use your ngrok URL:
+
+```
+https://your-ngrok-url/slack/interactions
+```
+
+5. Save changes  
+
+This endpoint handles all button interactions such as Accept and Decline.
+
+---
 ---
 
 ## Testing
@@ -148,19 +235,17 @@ To verify the integration:
 
 ---
 
-## System Flow
-
-```
-Monday.com → Backend → Slack → Backend → Monday.com
-```
-
 ---
 
 ## Notes
 
-* The ngrok URL changes each time the service is restarted; update the webhook accordingly
-* Do not include `node_modules`, `.env`, or log files in the repository
-* Ensure all required environment variables are set before running the application
+- The ngrok URL changes each time the service is restarted; update the webhook accordingly  
+- Do not include `node_modules`, `.env`, or log files in the repository  
+- Ensure all required environment variables are set before running the application  
+- The application uses a local SQLite database stored in the `database/` folder  
+- Ensure this folder exists and is persistent in production environments  
+- In development, ngrok is used to expose the local server  
+- In production, this should be replaced with the company’s server endpoint 
 
 ---
 
