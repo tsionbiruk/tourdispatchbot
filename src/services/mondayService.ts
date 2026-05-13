@@ -71,6 +71,8 @@ type MondayColumnValue = {
   id: string;
   text: string | null;
   value: string | null;
+  type?: string;
+  display_value?: string | null;
 };
 
 type MondayItem = {
@@ -120,7 +122,15 @@ async function mondayQuery<T>(query: string, variables?: Record<string, unknown>
 
 function getColumnText(item: MondayItem, columnId: string): string {
   if (!columnId) return '';
-  return item.column_values.find((c) => c.id === columnId)?.text?.trim() ?? '';
+
+  const column = item.column_values.find((c) => c.id === columnId);
+  if (!column) return '';
+
+  if (column.type === 'formula') {
+    return column.display_value?.trim() ?? '';
+  }
+
+  return column.text?.trim() ?? column.display_value?.trim() ?? '';
 }
 
 function getColumnValue(item: MondayItem, columnId: string): string | null {
@@ -309,8 +319,12 @@ export async function getTourById(itemId: string): Promise<Tour> {
         name
         column_values(ids: [${columnIdsGql}]) {
           id
+          type
           text
           value
+          ... on FormulaValue {
+            display_value
+          }
           ... on BoardRelationValue {
             linked_item_ids
             linked_items {
@@ -377,8 +391,14 @@ export async function parseTourDispatchColumns(itemId: string): Promise<{
         name
         column_values(ids: [${columnIdsGql}]) {
           id
+          type
           text
           value
+
+          ... on FormulaValue {
+            display_value
+          }
+
           ... on BoardRelationValue {
             linked_item_ids
             linked_items {
@@ -413,7 +433,7 @@ export async function parseTourDispatchColumns(itemId: string): Promise<{
   const manualGuideIds =
     Array.isArray(guidesColumn?.linked_item_ids) && guidesColumn.linked_item_ids.length > 0
       ? guidesColumn.linked_item_ids.map(String)
-      : parseManualGuideIdentifiers(guidesValue, guidesText);
+      : parseManualGuideIdentifiers(guidesValue, guidesText || guidesColumn?.display_value);
   const dispatchMode = manualGuideIds.length > 0 ? 'manual_selection' : parseDispatchMode(modeText);
 
   logger.info(
@@ -487,7 +507,9 @@ export async function updateTourWorkflowFields(
   };
 }
   if (fields.assignedGuideName !== undefined && ASSIGNED_GUIDE_COLUMN_ID) {
-  columnValues[ASSIGNED_GUIDE_COLUMN_ID] = fields.assignedGuideName;
+  columnValues[ASSIGNED_GUIDE_COLUMN_ID] = {
+    labels: [fields.assignedGuideName],
+  };
 }
 
   if (Object.keys(columnValues).length === 0) return;
@@ -512,10 +534,12 @@ export async function updateDispatchStatus(
 
 export async function updateAssignedGuide(
   itemId: string,
-  assignedGuideId: string
+  assignedGuideId: string,
+  assignedGuideName?: string
 ): Promise<void> {
   return updateTourWorkflowFields(itemId, {
     assignedGuideId,
+    assignedGuideName,
     isAssigned: true,
     status: 'Assigned',
     dispatchStatus: 'Complete',
