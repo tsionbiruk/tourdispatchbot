@@ -73,7 +73,7 @@ Create a `.env` file in the root directory with the following variables:
 ```
 MONDAY_API_TOKEN=
 MONDAY_TOURS_BOARD_ID=
-MONDAY_GUIDE_INFO_BOARD_ID=
+MONDAY_TEAM_MEMBERS_BOARD_ID=
 
 MONDAY_DISPATCH_TRIGGER_COLUMN_ID=
 MONDAY_TOUR_DISPATCH_MODE_COLUMN_ID=
@@ -135,14 +135,16 @@ npm start
 
 ## Deployment
 
-The application is currently tested locally using ngrok. For production use, it should be deployed on a persistent server.
+This service is designed to be deployed using Docker and Cloud Run.
 
-### Deployment Requirements
+Required routes:
 
-- Node.js (v18 or higher recommended)
-- A publicly accessible HTTPS endpoint
-- Environment variables configured on the server
-- Persistent storage for the `database/` folder
+GET /health
+POST /slack/events
+POST /slack/interactions
+POST /webhooks/monday
+
+Environment variables should be provided through the deployment platform and should not be committed to source control.
 
 ### Running in Production
 

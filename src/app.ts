@@ -24,7 +24,7 @@ import mondayWebhookRouter from './routes/mondayWebhook';
 import { SlackActionId, OfferMetadata } from './types/slack';
 import { logger } from './utils/logger';
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT || '8080', 10);
 
 // ---------------------------------------------------------------------------
 // Slack Bolt — using ExpressReceiver so we can share the Express app
