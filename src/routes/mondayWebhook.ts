@@ -123,15 +123,9 @@ function verifyMondaySignature(rawBody: string, signature: string | undefined): 
   }
 
   if (!signature) {
-    if (process.env.NODE_ENV === 'production') {
-      logger.warn('[mondayWebhook] No x-monday-signature header present — rejecting (production)');
-      return false;
-    }
-    logger.warn(
-      '[mondayWebhook] No x-monday-signature header present — allowing through (non-production)'
-    );
-    return true;
-  }
+  logger.warn('[mondayWebhook] No x-monday-signature header present — allowing because webhook token was verified');
+  return true;
+}
 
   const hash = crypto
     .createHmac('sha256', MONDAY_SIGNING_SECRET)
@@ -155,6 +149,14 @@ function verifyMondaySignature(rawBody: string, signature: string | undefined): 
  *   - All other events are acknowledged and ignored
  */
 router.post('/', async (req: Request, res: Response): Promise<void> => {
+
+  const webhookToken = req.query.token;
+
+  if (webhookToken !== process.env.MONDAY_WEBHOOK_TOKEN) {
+    logger.warn('[mondayWebhook] Invalid or missing webhook token — rejecting request');
+    res.status(401).json({ error: 'Invalid webhook token' });
+    return;
+  }
   // ── Challenge handshake ─────────────────────────────────────────────────────
   if (req.body?.challenge) {
     logger.info('[mondayWebhook] Received monday.com challenge — responding');
