@@ -73,6 +73,7 @@ Create a `.env` file in the root directory with the following variables:
 ```
 MONDAY_API_TOKEN=
 MONDAY_TOURS_BOARD_ID=
+MONDAY_WEBHOOK_TOKEN=
 MONDAY_TEAM_MEMBERS_BOARD_ID=
 
 MONDAY_DISPATCH_TRIGGER_COLUMN_ID=
@@ -262,12 +263,7 @@ Create a local `.env` file with the required credentials.
 
 ---
 
-## Future Improvements
 
-* Deployment to a persistent hosting environment
-* Enhanced monitoring and logging
-* Improved guide selection strategies
-* Retry and timeout handling for dispatch operations
 
 ---
 
