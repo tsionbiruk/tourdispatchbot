@@ -83,6 +83,23 @@ export type AcceptOfferResult =
  * Must be called once at application startup before any other offerService call.
  */
 
+export function resetDispatch(tourId: string): void {
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      DELETE FROM offers
+      WHERE tour_id = ?
+    `).run(tourId);
+
+    db.prepare(`
+      DELETE FROM tour_dispatch
+      WHERE tour_id = ?
+    `).run(tourId);
+  });
+
+  transaction();
+
+  logger.info(`[offerService] Reset dispatch for tour ${tourId}`);
+}
 
 export function initDb(): void {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -105,6 +122,21 @@ export function initDb(): void {
       updated_at        TEXT    NOT NULL
     );
   `);
+  db.exec(`
+  CREATE TABLE IF NOT EXISTS offers (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    tour_id          TEXT    NOT NULL,
+    guide_id         TEXT    NOT NULL,
+    slack_user_id    TEXT    NOT NULL,
+    slack_channel_id TEXT,
+    slack_message_ts TEXT,
+    status           TEXT    NOT NULL DEFAULT 'pending'
+                     CHECK(status IN ('pending', 'accepted', 'declined', 'superseded', 'expired')),
+    created_at       TEXT    NOT NULL,
+    expires_at       TEXT    NOT NULL,
+    responded_at     TEXT
+  );
+`);
 
   logger.info(`[offerService] SQLite database opened at ${DB_PATH}`);
 }

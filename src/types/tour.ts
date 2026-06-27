@@ -15,6 +15,12 @@ export interface Tour {
   tourType: string;
   /** Current status column value on monday.com */
   status: string;
+
+  /** Display date from Monday board */
+  date?: string;
+
+  /** Display start time from Monday board */
+  time?: string;
   /** monday.com item ID of the currently assigned guide, if any */
   assignedGuideId?: string;
 
@@ -27,6 +33,13 @@ export interface Tour {
   dispatchMode?: DispatchMode;
 
   /**
+   * Whether this dispatch is for a Guide or a Host.
+   * Populated when the dispatch starts.
+   */
+  dispatchRole?: 'guide' | 'host';
+
+
+  /**
    * Guide IDs explicitly chosen by the manager.
    * Only relevant when dispatchMode === "manual_selection".
    */
@@ -36,6 +49,7 @@ export interface Tour {
    * Whether this tour has been successfully assigned to a guide.
    * Once true, no further acceptances should be processed.
    */
+
   isAssigned: boolean;
 
   /**
@@ -74,6 +88,7 @@ export interface MondayStatusWebhookPayload {
   event: {
     type: 'StatusChanged';
     boardId: number;
+    
     itemId: number;
     columnId: string;
     previousValue: { label: string; index: number };

@@ -30,7 +30,7 @@ import {
   getOffersForTour,
   cancelDispatch,
 } from './offerService';
-import { updateTourWorkflowFields } from './mondayService';
+import { updateTourWorkflowFields, getTourById } from './mondayService';
 import { notifyAdminChannel } from './slackService';
 import { logger } from '../utils/logger';
 
@@ -136,17 +136,18 @@ async function handlePostExpiryCheck(tourId: string): Promise<void> {
     logger.error(`[schedulerService] Failed to cancel dispatch for tour ${tourId}:`, err);
   }
 
-  try {
-    await updateTourWorkflowFields(tourId, { status: 'Manual Review' });
-  } catch (err) {
-    logger.error(`[schedulerService] Failed to update monday.com status for tour ${tourId}:`, err);
-  }
+  await updateTourWorkflowFields(tourId, {
+    dispatchStatus: 'Manual Review',
+    dispatchTrigger: 'Complete',
+  });
+
+  const tour = await getTourById(tourId);
 
   try {
     await notifyAdminChannel(
       `⚠️ *Manual Review Required*\n` +
-        `Tour ID *${tourId}* — all guides either declined or did not respond before the offer expired. ` +
-        `Manual assignment required.`
+      `Tour ${tour.name} - ${tour.date} - ${tour.time} - all guides either declined or did not respond before the offer expired. ` +
+      `Manual assignment required.`
     );
   } catch (err) {
     logger.error(`[schedulerService] Failed to notify admin for tour ${tourId}:`, err);

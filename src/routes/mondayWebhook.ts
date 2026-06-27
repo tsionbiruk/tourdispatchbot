@@ -43,7 +43,13 @@ import {
   updateDispatchStatus,
 } from '../services/mondayService';
 import { selectGuidesForTour, DispatchOptions } from '../services/guideSelectionService';
-import { openDispatch, updateOfferSlackMessage, getDispatch } from '../services/offerService';
+import {
+  openDispatch,
+  updateOfferSlackMessage,
+  getDispatch,
+  getOffersForTour,
+  resetDispatch,
+} from '../services/offerService';
 import { sendOfferToGuide, notifyAdminChannel } from '../services/slackService';
 import { logger } from '../utils/logger';
 
@@ -246,19 +252,24 @@ async function handleDispatchTrigger(payload: MondayDispatchTriggerPayload): Pro
 
   try {
     // ── 2. Guard: do not restart an already-open or assigned dispatch ────────
-    const existingDispatch = getDispatch(tourId);
-    if (existingDispatch?.status === 'open') {
-      logger.info(`[mondayWebhook] Tour ${tourId} already has an open dispatch — skipping`);
-      return;
-    }
-    if (existingDispatch?.status === 'assigned') {
-      logger.info(`[mondayWebhook] Tour ${tourId} is already assigned — skipping`);
-      return;
-    }
-
-    // ── 3. Resolve dispatch mode ─────────────────────────────────────────────
     const options = await resolveDispatchOptions(payload, tourId);
+    const existingDispatch = getDispatch(tourId);
 
+    if (existingDispatch?.status === 'open') {
+        logger.info(
+            `[mondayWebhook] Tour ${tourId} already has an open dispatch.`
+        );
+        return;
+    }
+
+    if (existingDispatch?.status === 'assigned') {
+      resetDispatch(tourId);
+        logger.info(
+            `[mondayWebhook] Previous dispatch completed. Starting a new dispatch.`
+        );
+    }
+    // ── 3. Resolve dispatch mode ─────────────────────────────────────────────
+    
     logger.info(
       `[mondayWebhook] Dispatch mode for tour ${tourId}: ${options.dispatchMode}` +
         (options.manualGuideIds?.length
@@ -270,15 +281,31 @@ async function handleDispatchTrigger(payload: MondayDispatchTriggerPayload): Pro
     await updateDispatchStatus(tourId, 'Dispatching');
 
     // ── 5. Fetch tour and select guides ───────────────────────────────────────
-    const tour   = await getTourById(tourId);
-    const guides = await selectGuidesForTour(tour, options);
+    const tour = await getTourById(tourId);
+    tour.dispatchRole = options.dispatchRole;
+    const selectedGuides = await selectGuidesForTour(tour, options);
+
+    const declinedGuideIds = new Set(
+      getOffersForTour(tourId, 'declined')
+        .map((offer) => offer.guideId)
+    );
+
+    const guides = selectedGuides.filter(
+      (guide) => !declinedGuideIds.has(guide.id)
+    );
 
     if (guides.length === 0) {
-      logger.warn(`[mondayWebhook] No guides found for tour ${tourId}`);
-      await updateDispatchStatus(tourId, 'No guides found');
-      await notifyAdminChannel(
-        `⚠️ *No Guides Found*\nTour *${tour.name}* (ID: ${tourId}) was triggered for dispatch but no guides were found on the Team Members board.`
+      logger.warn(
+        `[mondayWebhook] No remaining eligible guides for tour ${tourId}`
       );
+
+      await updateDispatchStatus(tourId, 'No remaining guides');
+
+      await notifyAdminChannel(
+        `⚠️ *No Remaining Guides*\n` +
+        `Tour ${tour.name} - ${tour.date} - ${tour.time} - all selected/eligible guides have already declined this tour. Manual assignment required.`
+      );
+
       return;
     }
 
@@ -292,7 +319,7 @@ async function handleDispatchTrigger(payload: MondayDispatchTriggerPayload): Pro
       tourId,
       guideOffers,
       options.dispatchMode,
-      options.manualGuideIds
+      options.manualGuideIds,
     );
     // offerIds is in the same order as guideOffers / guides
 
@@ -303,6 +330,7 @@ async function handleDispatchTrigger(payload: MondayDispatchTriggerPayload): Pro
           offerId: offerIds[i],
           tourId,
           guideId: guide.id,
+          dispatchRole: options.dispatchRole,
         })
       )
     );
@@ -341,9 +369,12 @@ async function handleDispatchTrigger(payload: MondayDispatchTriggerPayload): Pro
     // At least one DM was delivered — mark as sent
     await updateDispatchStatus(tourId, 'Message sent');
     await notifyAdminChannel(
-      `📨 *Dispatch Started*\nTour *${tour.name}* (ID: ${tourId}) — offers sent to ${sentCount} guide(s). Mode: \`${options.dispatchMode}\`.` +
-        (failedCount > 0 ? ` (${failedCount} DM(s) failed to send)` : '')
-    );
+  `${options.dispatchRole === 'host' ? 'Host' : 'Guide'} Dispatch\n` +
+  `Tour ${tour.name} - ${tour.date} - ${tour.time}\n` +
+  `Role: ${options.dispatchRole}\n` +
+  `Offer(s) sent to ${sentCount} ${options.dispatchRole}(s).` +
+  (failedCount > 0 ? ` ${failedCount} DM(s) failed to send.` : '')
+);
   } catch (err) {
     logger.error(
       `[mondayWebhook] Error handling dispatch trigger for tour ${tourId}:`,
@@ -385,7 +416,11 @@ async function resolveDispatchOptions(
         ? (embeddedData.manualGuideIds ?? [])
         : undefined;
 
-    return { dispatchMode, manualGuideIds };
+    return {
+  dispatchMode,
+  dispatchRole: 'guide',
+  manualGuideIds,
+};
   }
 
   // Column-change events carry no embedded dispatch config — read from board.
@@ -393,10 +428,11 @@ async function resolveDispatchOptions(
     `[mondayWebhook] No dispatch data in event payload for tour ${tourId} — reading from board columns`
   );
 
-  const { dispatchMode, manualGuideIds } = await parseTourDispatchColumns(tourId);
+  const { dispatchMode, dispatchRole, manualGuideIds } = await parseTourDispatchColumns(tourId);
 
   return {
     dispatchMode,
+    dispatchRole,
     manualGuideIds: dispatchMode === 'manual_selection' ? manualGuideIds : undefined,
   };
 }

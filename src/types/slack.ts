@@ -16,6 +16,7 @@ export enum SlackActionId {
  */
 export interface OfferMetadata {
   offerId: number;
+  dispatchRole: 'guide' | 'host';
   tourId: string;
   guideId: string;
 }

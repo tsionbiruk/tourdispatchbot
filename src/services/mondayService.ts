@@ -38,10 +38,21 @@ const TOUR_MANUAL_GUIDES_COLUMN_ID =
   process.env.MONDAY_SELECTED_GUIDES_COLUMN_ID ||
   process.env.MONDAY_TOUR_MANUAL_GUIDES_COLUMN_ID ||
   'manual_guides';
+const TOUR_DATE_COLUMN_ID = process.env.MONDAY_TOUR_DATE_COLUMN_ID || 'date4';
+const TOUR_START_TIME_COLUMN_ID =
+  process.env.MONDAY_TOUR_START_TIME_COLUMN_ID || 'text9';
+const TOUR_GUIDE_STATUS_COLUMN_ID =
+  process.env.MONDAY_TOUR_GUIDE_STATUS_COLUMN_ID || 'status';
+
+const TOUR_DISPATCH_ROLE_COLUMN_ID =
+  process.env.MONDAY_DISPATCH_ROLE_COLUMN_ID || 'dispatch_role';
+
 
 // ── Tours board: output/metadata columns ──────────────────────────────────────
 
 const TOUR_STATUS_COLUMN_ID = process.env.MONDAY_TOUR_STATUS_COLUMN_ID || 'status';
+const TOUR_HOST_STATUS_COLUMN_ID =
+  process.env.MONDAY_TOUR_HOST_STATUS_COLUMN_ID || 'host_status';
 const TOUR_START_COLUMN_ID = process.env.MONDAY_TOUR_START_COLUMN_ID || 'date';
 const TOUR_END_COLUMN_ID = process.env.MONDAY_TOUR_END_COLUMN_ID || 'date_end';
 const TOUR_TYPE_COLUMN_ID = process.env.MONDAY_TOUR_TYPE_COLUMN_ID || 'tour_type';
@@ -49,6 +60,8 @@ const DISPATCH_STATUS_COLUMN_ID =
   process.env.MONDAY_DISPATCH_STATUS_COLUMN_ID || 'dispatch_status';
 const TOUR_ASSIGNED_GUIDE_COLUMN_ID =
   process.env.MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID || 'assigned_guide';
+const TOUR_ASSIGNED_HOST_COLUMN_ID =
+  process.env.MONDAY_TOUR_ASSIGNED_HOST_COLUMN_ID || 'host';
 const ASSIGNED_GUIDE_COLUMN_ID = process.env.MONDAY_TOUR_ASSIGNED_GUIDE_COLUMN_ID;
 // ── Webhook trigger config ────────────────────────────────────────────────────
 
@@ -302,6 +315,9 @@ export async function getTourById(itemId: string): Promise<Tour> {
   logger.info(`[mondayService] Fetching tour item ${itemId}`);
 
   const requestedColumnIds = [
+    TOUR_DATE_COLUMN_ID,
+    TOUR_START_TIME_COLUMN_ID,
+    TOUR_GUIDE_STATUS_COLUMN_ID,
     TOUR_NAME_COLUMN_ID,
     TOUR_START_COLUMN_ID,
     TOUR_END_COLUMN_ID,
@@ -347,6 +363,8 @@ export async function getTourById(itemId: string): Promise<Tour> {
   const tourTypeFromColumn = getColumnText(item, TOUR_TYPE_COLUMN_ID);
   const statusFromColumn = getColumnText(item, TOUR_STATUS_COLUMN_ID);
   const assignedGuideFromColumn = getColumnText(item, TOUR_ASSIGNED_GUIDE_COLUMN_ID);
+  const tourDateFromColumn = getColumnText(item, TOUR_DATE_COLUMN_ID);
+  const tourTimeFromColumn = getColumnText(item, TOUR_START_TIME_COLUMN_ID);
 
   const tourName = nameFromColumn || tourTypeFromColumn || item.name;
   const startFallback = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -359,6 +377,8 @@ export async function getTourById(itemId: string): Promise<Tour> {
     endTime: parseDateColumn(getColumnValue(item, TOUR_END_COLUMN_ID), endFallback),
     tourType: tourTypeFromColumn || tourName,
     status: statusFromColumn || 'Available',
+    date: tourDateFromColumn,
+    time: tourTimeFromColumn,
     isAssigned: Boolean(assignedGuideFromColumn),
     assignedGuideId: assignedGuideFromColumn || undefined,
     acceptedGuideId: undefined,
@@ -373,6 +393,7 @@ export async function getTourById(itemId: string): Promise<Tour> {
 
 export async function parseTourDispatchColumns(itemId: string): Promise<{
   dispatchMode: DispatchMode;
+  dispatchRole: 'guide' | 'host';
   manualGuideIds: string[];
 }> {
   logger.info(`[mondayService] Reading dispatch columns for tour ${itemId}`);
@@ -380,6 +401,7 @@ export async function parseTourDispatchColumns(itemId: string): Promise<{
   const requestedColumnIds = [
     TOUR_DISPATCH_MODE_COLUMN_ID,
     TOUR_MANUAL_GUIDES_COLUMN_ID,
+    TOUR_DISPATCH_ROLE_COLUMN_ID,
   ].filter(Boolean);
 
   const columnIdsGql = requestedColumnIds.map((id) => `"${id}"`).join(', ');
@@ -422,6 +444,12 @@ export async function parseTourDispatchColumns(itemId: string): Promise<{
   const modeText = getColumnText(item, TOUR_DISPATCH_MODE_COLUMN_ID);
   const guidesText = getColumnText(item, TOUR_MANUAL_GUIDES_COLUMN_ID);
   const guidesValue = getColumnValue(item, TOUR_MANUAL_GUIDES_COLUMN_ID);
+  const roleText = getColumnText(item, TOUR_DISPATCH_ROLE_COLUMN_ID);
+
+  const dispatchRole =
+    roleText.toLowerCase() === 'host'
+      ? 'host'
+      : 'guide';
 
   logger.info(
   `[mondayService] Selected guides debug: envColumnId=${TOUR_MANUAL_GUIDES_COLUMN_ID}, text=${guidesText}, value=${guidesValue}`
@@ -436,11 +464,12 @@ export async function parseTourDispatchColumns(itemId: string): Promise<{
       : parseManualGuideIdentifiers(guidesValue, guidesText || guidesColumn?.display_value);
   const dispatchMode = manualGuideIds.length > 0 ? 'manual_selection' : parseDispatchMode(modeText);
 
+  
   logger.info(
     `[mondayService] Dispatch config for tour ${itemId}: mode=${dispatchMode}, manualSelections=${JSON.stringify(manualGuideIds)}`
   );
 
-  return { dispatchMode, manualGuideIds };
+  return { dispatchMode, dispatchRole, manualGuideIds };
 }
 
 /**
@@ -481,9 +510,12 @@ export async function updateTourWorkflowFields(
   fields: {
     assignedGuideId?: string;
     assignedGuideName?: string;
+    hostStatus?: string;
+    assignedHostName?: string;
     acceptedGuideId?: string;
     isAssigned?: boolean;
     status?: string;
+    guideStatus?: string;
     dispatchStatus?: string;
     dispatchTrigger?: string;
     dispatchMode?: DispatchMode;
@@ -506,10 +538,24 @@ export async function updateTourWorkflowFields(
     label: fields.dispatchTrigger,
   };
 }
-  if (fields.assignedGuideName !== undefined && ASSIGNED_GUIDE_COLUMN_ID) {
-  columnValues[ASSIGNED_GUIDE_COLUMN_ID] = {
-    labels: [fields.assignedGuideName],
+  if (fields.guideStatus !== undefined && TOUR_GUIDE_STATUS_COLUMN_ID) {
+  columnValues[TOUR_GUIDE_STATUS_COLUMN_ID] = {
+    label: fields.guideStatus,
   };
+}
+
+if (fields.hostStatus !== undefined && TOUR_HOST_STATUS_COLUMN_ID) {
+  columnValues[TOUR_HOST_STATUS_COLUMN_ID] = {
+    label: fields.hostStatus,
+  };
+}
+
+  if (fields.assignedGuideName !== undefined && ASSIGNED_GUIDE_COLUMN_ID) {
+  columnValues[ASSIGNED_GUIDE_COLUMN_ID] = fields.assignedGuideName;
+}
+
+if (fields.assignedHostName !== undefined && TOUR_ASSIGNED_HOST_COLUMN_ID) {
+  columnValues[TOUR_ASSIGNED_HOST_COLUMN_ID] = fields.assignedHostName;
 }
 
   if (Object.keys(columnValues).length === 0) return;
@@ -541,7 +587,6 @@ export async function updateAssignedGuide(
     assignedGuideId,
     assignedGuideName,
     isAssigned: true,
-    status: 'Assigned',
     dispatchStatus: 'Complete',
     dispatchTrigger: 'Complete',
   });

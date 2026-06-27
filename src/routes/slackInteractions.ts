@@ -42,10 +42,14 @@ import {
 import {
   updateTourWorkflowFields,
   getGuidesFromTeamBoard,
+  getTourById,
+  parseTourDispatchColumns,
 } from '../services/mondayService';
 import { logger } from '../utils/logger';
 
+
 const router = Router();
+
 
 /**
  * POST /slack/interactions
@@ -181,24 +185,38 @@ export async function handleAccept(
 
     const acceptedGuides = await getGuidesFromTeamBoard([meta.guideId]);
     const acceptedGuideName = acceptedGuides[0]?.name ?? meta.guideId;
+    const { dispatchRole } = await parseTourDispatchColumns(meta.tourId);
 
     await updateTourWorkflowFields(meta.tourId, {
-      assignedGuideName: acceptedGuideName,
-      acceptedGuideId: meta.guideId,
-      isAssigned: true,
-    });
+  ...(dispatchRole === 'host'
+    ? {
+        assignedHostName: acceptedGuideName,
+        hostStatus: 'Confirmed',
+      }
+    : {
+        assignedGuideName: acceptedGuideName,
+        guideStatus: 'Confirmed',
+      }),
+
+  acceptedGuideId: meta.guideId,
+  isAssigned: true,
+  dispatchStatus: 'Complete',
+  dispatchTrigger: 'Complete',
+});
   } catch (err) {
     logger.error('[slackInteractions] Failed to update monday.com after acceptance:', err);
   }
 
   // 4. Notify ops team
-  try {
-    await notifyAdminChannel(
-      `✅ *Tour Assigned*\nTour ID *${meta.tourId}* has been accepted by guide <@${payload.user.id}>.`
-    );
-  } catch (err) {
-    logger.error('[slackInteractions] Failed to notify admin channel:', err);
-  }
+  const tour = await getTourById(meta.tourId);
+  const { dispatchRole } = await parseTourDispatchColumns(meta.tourId);
+
+  await notifyAdminChannel(
+  `${dispatchRole === 'host' ? 'Host' : 'Guide'} Assignment\n` +
+  `Tour ${tour.name} - ${tour.date} - ${tour.time}\n` +
+  `Role: ${dispatchRole}\n` +
+  `Accepted by <@${payload.user.id}>.`
+);
 }
 
 /**
@@ -273,13 +291,20 @@ async function checkAndHandleExhaustedDispatch(tourId: string): Promise<void> {
     logger.error(`[slackInteractions] Failed to cancel dispatch for tour ${tourId}:`, err);
   }
 
-  try {
-    await notifyAdminChannel(
-      `⚠️ *No Guide Available*\nTour ID *${tourId}* — all guides have declined or did not respond. Manual assignment required.`
-    );
-  } catch (err) {
-    logger.error('[slackInteractions] Failed to notify admin of exhausted dispatch:', err);
-  }
+  await updateTourWorkflowFields(tourId, {
+    dispatchStatus: 'Manual Review',
+    dispatchTrigger: 'Complete',
+  });
+
+  const tour = await getTourById(tourId);
+  const { dispatchRole } = await parseTourDispatchColumns(tourId);
+
+  await notifyAdminChannel(
+  `⚠️ *No ${dispatchRole === 'host' ? 'Host' : 'Guide'} Available*\n` +
+  `Tour ${tour.name} - ${tour.date} - ${tour.time}\n` +
+  `Role: ${dispatchRole}\n` +
+  `All ${dispatchRole}s have declined or did not respond. Manual assignment required.`
+);
 }
 
 /**

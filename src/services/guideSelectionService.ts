@@ -5,8 +5,11 @@ import { Tour, DispatchMode } from '../types/tour';
 import { Guide, TourReference } from '../types/guide';
 import { logger } from '../utils/logger';
 
+export type DispatchRole = 'guide' | 'host';
+
 export interface DispatchOptions {
   dispatchMode: DispatchMode;
+  dispatchRole: 'guide' | 'host';
   manualGuideIds?: string[];
 }
 
@@ -37,22 +40,29 @@ function tourRefMatchesTour(tourRef: TourReference, tour: Tour): boolean {
   return Boolean(refName && tourName && refName === tourName);
 }
 
-export function isGuideEligibleForTour(guide: Guide, tour: Tour): boolean {
+export function isGuideEligibleForTour(
+  guide: Guide,
+  tour: Tour,
+  dispatchRole: DispatchRole = 'guide'
+): boolean {
   const guidedTours = guide.guidedTours ?? [];
   const hostedTours = guide.hostedTours ?? [];
 
-  return (
-    guidedTours.some((tourRef) => tourRefMatchesTour(tourRef, tour)) ||
-    hostedTours.some((tourRef) => tourRefMatchesTour(tourRef, tour))
-  );
+  if (dispatchRole === 'host') {
+    return hostedTours.some((tourRef) => tourRefMatchesTour(tourRef, tour));
+  }
+
+  return guidedTours.some((tourRef) => tourRefMatchesTour(tourRef, tour));
 }
 
 export async function selectGuidesForTour(
   tour: Tour,
   options: DispatchOptions
 ): Promise<Guide[]> {
+  const dispatchRole: DispatchRole = options.dispatchRole ?? 'guide';
+
   logger.info(
-    `[guideSelectionService] Selecting guides for tour ${tour.id} with mode: ${options.dispatchMode}`
+    `[guideSelectionService] Selecting ${dispatchRole}s for tour ${tour.id} with mode: ${options.dispatchMode}`
   );
 
   const candidates: Guide[] =
@@ -61,28 +71,31 @@ export async function selectGuidesForTour(
       : await getGuidesFromTeamBoard();
 
   logger.info(
-    `[guideSelectionService] ${candidates.length} candidate guide(s) before eligibility filtering`
+    `[guideSelectionService] ${candidates.length} candidate(s) before ${dispatchRole} eligibility filtering`
   );
 
   const eligibleGuides = candidates.filter((guide) =>
-    isGuideEligibleForTour(guide, tour)
+    isGuideEligibleForTour(guide, tour, dispatchRole)
   );
 
   const skippedGuides = candidates.filter(
-    (guide) => !isGuideEligibleForTour(guide, tour)
+    (guide) => !isGuideEligibleForTour(guide, tour, dispatchRole)
   );
 
   logger.info(
-    `[guideSelectionService] ${eligibleGuides.length} eligible guide(s) after filtering`
+    `[guideSelectionService] ${eligibleGuides.length} eligible ${dispatchRole}(s) after filtering`
   );
 
   if (skippedGuides.length > 0) {
     logger.debug(
-      `[guideSelectionService] Skipped guides: ${JSON.stringify(
+      `[guideSelectionService] Skipped ${dispatchRole}(s): ${JSON.stringify(
         skippedGuides.map((guide) => ({
           id: guide.id,
           name: guide.name,
-          reason: 'Tour not found in guidedTours or hostedTours',
+          reason:
+            dispatchRole === 'host'
+              ? 'Tour not found in hostedTours'
+              : 'Tour not found in guidedTours',
         }))
       )}`
     );

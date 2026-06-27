@@ -28,7 +28,6 @@ import { App as BoltApp } from '@slack/bolt';
 import { KnownBlock, Block } from '@slack/types';
 import { Tour } from '../types/tour';
 import { Guide } from '../types/guide';
-import { formatForSlack } from '../utils/time';
 import { logger } from '../utils/logger';
 import { updateTourWorkflowFields } from './mondayService';
 
@@ -55,6 +54,7 @@ type OfferMetadata = {
   offerId: number;
   tourId: string;
   guideId: string;
+  dispatchRole: 'guide' | 'host';
 };
 
 enum SlackActionId {
@@ -144,7 +144,7 @@ export async function confirmAcceptanceToGuide(
   await boltApp.client.chat.update({
     channel: channelId,
     ts: messageTs,
-    text: `You have been assigned tour ${tourId}`,
+    text: `You have been assigned this tour`,
     blocks: [
       {
         type: 'section',
@@ -152,8 +152,8 @@ export async function confirmAcceptanceToGuide(
           type: 'mrkdwn',
           text:
             `✅ *Tour Confirmed!*\n\n` +
-            `You have been assigned to tour *${tourId}*.\n` +
-            `Check monday.com for full details.`,
+            `You have been assigned to tour *${tourId}*.`,
+            
         },
       },
     ],
@@ -174,13 +174,13 @@ export async function confirmDeclineToGuide(
   await boltApp.client.chat.update({
     channel: channelId,
     ts: messageTs,
-    text: `Tour offer declined: ${tourId}`,
+    text: `Tour offer declined`,
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `You have declined the offer for tour *${tourId}*. No further action needed.`,
+          text: `You have declined the offer for the tour. No further action needed.`,
         },
       },
     ],
@@ -213,8 +213,7 @@ export async function markOfferSuperseded(
         text: {
           type: 'mrkdwn',
           text:
-            `~*Tour Offer — ${tourId}*~\n\n` +
-            `This offer is no longer available — another guide has accepted.\n` +
+            `This Tour offer is no longer available — another guide has accepted.\n` +
             `Thank you for your availability! 🙏`,
         },
       },
@@ -298,13 +297,13 @@ function buildActiveOfferBlocks(tour: Tour, metadataStr: string): (KnownBlock | 
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text:
-          `*New Tour Offer* 🗺️\n\n` +
-          `*Tour:* ${tour.name}\n` +
-          `*Type:* ${tour.tourType}\n` +
-          `*Start:* ${formatForSlack(new Date(tour.startTime))}\n` +
-          `*End:* ${formatForSlack(new Date(tour.endTime))}\n\n` +
-          `This offer is open to multiple guides — first to accept gets the tour.`,
+       text:
+        `*New Tour Offer:*\n\n` +
+        `*Tour:* ${tour.name}\n` +
+        `*Role:* ${tour.dispatchRole === 'host' ? 'Host' : 'Guide'}\n` +
+        `*Date:* ${tour.date}\n` +
+        `*Time:* ${tour.time}\n\n` +
+        `This offer is open to multiple guides, first to accept gets the tour.`,
       },
     },
     {
