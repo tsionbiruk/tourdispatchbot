@@ -31,6 +31,7 @@ import { Guide } from '../types/guide';
 import { logger } from '../utils/logger';
 import { updateTourWorkflowFields } from './mondayService';
 
+
 let boltApp: BoltApp;
 
 /**
@@ -137,23 +138,25 @@ export async function sendOffersToAllGuides(
 export async function confirmAcceptanceToGuide(
   channelId: string,
   messageTs: string,
-  tourId: string
+  tour: Tour
 ): Promise<void> {
-  logger.info(`[slackService] Confirming acceptance to guide — tour ${tourId}, ts=${messageTs}`);
+  logger.info(`[slackService] Confirming acceptance to guide — tour ${tour.id}, ts=${messageTs}`);
 
   await boltApp.client.chat.update({
     channel: channelId,
     ts: messageTs,
-    text: `You have been assigned this tour`,
+    text: `Congratulations, you have accepted this tour`,
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
           text:
-            `✅ *Tour Confirmed!*\n\n` +
-            `You have been assigned to tour *${tourId}*.`,
-            
+            `🎉 *Congratulations! You have accepted this tour.*\n\n` +
+            `*Tour:* ${tour.name}\n` +
+            `*Date:* ${formatTourDate(tour.date ?? '')}\n` +
+            `*Time:* ${tour.time}\n` +
+            `*Role:* ${tour.dispatchRole === 'host' ? 'Host' : 'Guide'}`,
         },
       },
     ],
@@ -291,6 +294,15 @@ export async function notifyAdminChannel(message: string): Promise<void> {
  * Builds the Block Kit blocks for an active offer message (with buttons).
  * Extracted so it can be tested independently of the Slack API call.
  */
+
+function formatTourDate(dateString: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(dateString));
+}
+
 function buildActiveOfferBlocks(tour: Tour, metadataStr: string): (KnownBlock | Block)[] {
   return [
     {
@@ -301,7 +313,7 @@ function buildActiveOfferBlocks(tour: Tour, metadataStr: string): (KnownBlock | 
         `*New Tour Offer:*\n\n` +
         `*Tour:* ${tour.name}\n` +
         `*Role:* ${tour.dispatchRole === 'host' ? 'Host' : 'Guide'}\n` +
-        `*Date:* ${tour.date}\n` +
+        `*Date:* ${formatTourDate(tour.date ?? '')}\n` +
         `*Time:* ${tour.time}\n\n` +
         `This offer is open to multiple guides, first to accept gets the tour.`,
       },

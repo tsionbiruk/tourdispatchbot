@@ -29,12 +29,24 @@ import {
   resolveOffer,
   getOffersForTour,
   cancelDispatch,
+  getDispatchesPendingTimeoutNotification,
+  markTimeoutNotified,
 } from './offerService';
-import { updateTourWorkflowFields, getTourById } from './mondayService';
+import { updateTourWorkflowFields, getTourById, parseTourDispatchColumns } from './mondayService';
 import { notifyAdminChannel } from './slackService';
 import { logger } from '../utils/logger';
 
 const POLL_INTERVAL_MS = parseInt(process.env.SCHEDULER_POLL_INTERVAL_MS || '300000', 10); // 5 min
+
+/**
+ * How long a dispatch can sit with no guide response before managers get a
+ * heads-up nudge. This does NOT expire or cancel the offer — guides can
+ * still accept after this fires. Default: 3 hours.
+ */
+const OFFER_TIMEOUT_NOTIFY_MS = parseInt(
+  process.env.OFFER_TIMEOUT_NOTIFY_MS || String(3 * 60 * 60 * 1000),
+  10
+);
 
 let schedulerTimer: NodeJS.Timeout | null = null;
 
@@ -74,6 +86,12 @@ export function stopScheduler(): void {
 async function runSchedulerCycle(): Promise<void> {
   logger.info('[schedulerService] Running scheduler cycle');
 
+  // Independent of the expired-offer handling below — a dispatch can be
+  // fully "on time" (offers not yet expired) and still be past the 3-hour
+  // no-response mark, since offer expiry and the manager nudge are on
+  // separate clocks.
+  await checkPendingTimeoutNotifications();
+
   const expiredOffers = getExpiredPendingOffers();
 
   if (expiredOffers.length === 0) {
@@ -96,6 +114,51 @@ async function runSchedulerCycle(): Promise<void> {
 
   for (const tourId of affectedTourIds) {
     await handlePostExpiryCheck(tourId);
+  }
+}
+
+/**
+ * Finds dispatches that have been open for 3+ hours with no guide response
+ * and haven't already been flagged for this session, then sends a one-time
+ * heads-up to the manager channel.
+ *
+ * Important: this never touches offer status, dispatch status, or Monday.
+ * The offer stays fully live — this is purely an informational nudge so a
+ * manager can decide whether to step in manually.
+ */
+async function checkPendingTimeoutNotifications(): Promise<void> {
+  const dueDispatches = getDispatchesPendingTimeoutNotification(OFFER_TIMEOUT_NOTIFY_MS);
+
+  if (dueDispatches.length === 0) return;
+
+  logger.info(
+    `[schedulerService] ${dueDispatches.length} dispatch(es) past the ${
+      OFFER_TIMEOUT_NOTIFY_MS / (60 * 60 * 1000)
+    }h no-response mark`
+  );
+
+  for (const dispatch of dueDispatches) {
+    try {
+      const tour = await getTourById(dispatch.tourId);
+      const { dispatchRole } = await parseTourDispatchColumns(dispatch.tourId);
+
+      await notifyAdminChannel(
+        `⏰ *No Response After 3 Hours*\n` +
+        `Tour ${tour.name} - ${tour.date} - ${tour.time}\n` +
+        `Role: ${dispatchRole}\n` +
+        `3 hours have passed since guides were contacted and no one has accepted yet. ` +
+        `The offer is still open and guides can still accept — would you like to follow up manually?`
+      );
+
+      // Mark this session as notified so it isn't repeated on every 5-minute
+      // poll. openDispatch() automatically clears this flag on re-dispatch.
+      markTimeoutNotified(dispatch.tourId);
+    } catch (err) {
+      logger.error(
+        `[schedulerService] Failed to send timeout notice for tour ${dispatch.tourId}:`,
+        err
+      );
+    }
   }
 }
 

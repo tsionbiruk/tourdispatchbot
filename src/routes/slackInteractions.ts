@@ -122,10 +122,10 @@ export async function handleAccept(
     await safeMarkAlreadyAssigned(payload, meta.tourId);
     return;
   }
-
+  
   // ── Atomic acceptance ─────────────────────────────────────────────────────
   const result = tryAcceptOffer(meta.offerId, meta.guideId);
-
+  const tour = await getTourById(meta.tourId);
   if (!result.success) {
     // Another guide won the race, or this offer was already terminal
     logger.info(
@@ -146,7 +146,7 @@ export async function handleAccept(
       await confirmAcceptanceToGuide(
         payload.channel.id,
         payload.message.ts,
-        meta.tourId
+        tour
       );
     } catch (err) {
       logger.error('[slackInteractions] Failed to confirm acceptance to guide:', err);
@@ -208,7 +208,7 @@ export async function handleAccept(
   }
 
   // 4. Notify ops team
-  const tour = await getTourById(meta.tourId);
+  
   const { dispatchRole } = await parseTourDispatchColumns(meta.tourId);
 
   await notifyAdminChannel(

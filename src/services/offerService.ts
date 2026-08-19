@@ -67,6 +67,12 @@ export interface TourDispatch {
   acceptedGuideId: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Whether the "3 hours, no response yet" nudge has already been sent to
+   * managers for the CURRENT dispatch session. Reset to false every time
+   * openDispatch() runs, so a re-dispatch gets its own fresh 3-hour clock.
+   */
+  timeoutNotified: boolean;
 }
 
 /**
@@ -122,6 +128,17 @@ export function initDb(): void {
       updated_at        TEXT    NOT NULL
     );
   `);
+  // Migration: add timeout_notified if this DB predates it. Safe to run on
+  // every startup — only ALTERs when the column is missing.
+  const tourDispatchColumns = db
+    .prepare(`PRAGMA table_info(tour_dispatch)`)
+    .all() as { name: string }[];
+
+  if (!tourDispatchColumns.some((col) => col.name === 'timeout_notified')) {
+    db.exec(`ALTER TABLE tour_dispatch ADD COLUMN timeout_notified INTEGER NOT NULL DEFAULT 0`);
+    logger.info('[offerService] Migrated tour_dispatch: added timeout_notified column');
+  }
+
   db.exec(`
   CREATE TABLE IF NOT EXISTS offers (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -185,14 +202,15 @@ export function openDispatch(
     // 1. Create or reset the tour_dispatch row
     db.prepare(`
       INSERT INTO tour_dispatch
-        (tour_id, status, dispatch_mode, manual_guide_ids, accepted_guide_id, created_at, updated_at)
-      VALUES (?, 'open', ?, ?, NULL, ?, ?)
+        (tour_id, status, dispatch_mode, manual_guide_ids, accepted_guide_id, created_at, updated_at, timeout_notified)
+      VALUES (?, 'open', ?, ?, NULL, ?, ?, 0)
       ON CONFLICT(tour_id) DO UPDATE SET
-        status           = 'open',
-        dispatch_mode    = excluded.dispatch_mode,
-        manual_guide_ids = excluded.manual_guide_ids,
+        status            = 'open',
+        dispatch_mode     = excluded.dispatch_mode,
+        manual_guide_ids  = excluded.manual_guide_ids,
         accepted_guide_id = NULL,
-        updated_at       = excluded.updated_at
+        updated_at        = excluded.updated_at,
+        timeout_notified  = 0
     `).run(tourId, dispatchMode, manualGuideIdsJson, now, now);
 
     // 2. Create one pending offer per guide
@@ -372,6 +390,7 @@ export function getDispatch(tourId: string): TourDispatch | undefined {
         accepted_guide_id: string | null;
         created_at: string;
         updated_at: string;
+        timeout_notified: number;
       }
     | undefined;
 
@@ -385,6 +404,7 @@ export function getDispatch(tourId: string): TourDispatch | undefined {
     acceptedGuideId: row.accepted_guide_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    timeoutNotified: !!row.timeout_notified,
   };
 }
 
@@ -475,4 +495,61 @@ export function getOffersForTour(tourId: string, status?: OfferStatus): Offer[] 
 FROM offers
 WHERE tour_id = ?`)
     .all(tourId) as Offer[];
+}
+
+// ── Timeout notifications (manager-facing, does not affect offers) ────────────
+
+/**
+ * Returns open dispatches that have been waiting `timeoutMs` or longer for a
+ * response and haven't already had a timeout notice sent for this session.
+ *
+ * "Session start" is tour_dispatch.updated_at — this is only touched by
+ * openDispatch() while status stays 'open' (tryAcceptOffer/cancelDispatch
+ * both flip status away from 'open' when they run), so it reliably marks
+ * when the current batch of offers went out, even across re-dispatches.
+ *
+ * Called by the scheduler. Does NOT touch offer status or expiry — pending
+ * offers remain live and guides can still accept after this fires.
+ */
+export function getDispatchesPendingTimeoutNotification(timeoutMs: number): TourDispatch[] {
+  const cutoff = new Date(Date.now() - timeoutMs).toISOString();
+
+  const rows = db
+    .prepare(`
+      SELECT * FROM tour_dispatch
+      WHERE status = 'open' AND timeout_notified = 0 AND updated_at <= ?
+    `)
+    .all(cutoff) as Array<{
+      tour_id: string;
+      status: DispatchStatus;
+      dispatch_mode: DispatchMode;
+      manual_guide_ids: string | null;
+      accepted_guide_id: string | null;
+      created_at: string;
+      updated_at: string;
+      timeout_notified: number;
+    }>;
+
+  return rows.map((row) => ({
+    tourId: row.tour_id,
+    status: row.status,
+    dispatchMode: row.dispatch_mode,
+    manualGuideIds: row.manual_guide_ids ? JSON.parse(row.manual_guide_ids) : null,
+    acceptedGuideId: row.accepted_guide_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    timeoutNotified: !!row.timeout_notified,
+  }));
+}
+
+/**
+ * Marks a dispatch as having sent its timeout notice, so the scheduler won't
+ * repeat it on subsequent polls. Automatically reset to false the next time
+ * this tour is (re-)dispatched via openDispatch().
+ */
+export function markTimeoutNotified(tourId: string): void {
+  db.prepare(`
+    UPDATE tour_dispatch SET timeout_notified = 1 WHERE tour_id = ?
+  `).run(tourId);
+  logger.info(`[offerService] Marked tour ${tourId} dispatch as timeout-notified`);
 }
