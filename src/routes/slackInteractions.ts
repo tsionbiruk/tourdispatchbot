@@ -46,6 +46,10 @@ import {
   parseTourDispatchColumns,
 } from '../services/mondayService';
 import { logger } from '../utils/logger';
+import {
+  forwardDispatchV2Interaction,
+  isDispatchV2Action,
+} from '../services/dispatchV2Service';
 
 
 const router = Router();
@@ -74,6 +78,21 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
 
   const action = payload.actions?.[0];
   if (!action) return;
+
+  // Dispatch V2 actions are deliberately isolated from the existing offer
+  // handlers. Only the dispatch_v2_* namespace is forwarded; accept_offer and
+  // decline_offer continue through the unchanged V1 path below.
+  if (isDispatchV2Action(action.action_id)) {
+    try {
+      await forwardDispatchV2Interaction(payload);
+    } catch (err) {
+      logger.error(
+        `[slackInteractions] Failed to forward Dispatch V2 action ${action.action_id}:`,
+        err
+      );
+    }
+    return;
+  }
 
   let meta: OfferMetadata;
   try {

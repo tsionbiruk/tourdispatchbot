@@ -86,6 +86,10 @@ SLACK_BOT_TOKEN=
 SLACK_SIGNING_SECRET=
 SLACK_APP_TOKEN=
 
+# Optional Dispatch V2 bridge. Leave unset to keep V2 forwarding disabled.
+DISPATCH_V2_INTERACTIONS_URL=
+DISPATCH_V2_PROXY_SECRET=
+
 PORT=3000
 ```
 
@@ -217,6 +221,13 @@ https://your-ngrok-url/slack/interactions
 5. Save changes  
 
 This endpoint handles all button interactions such as Accept and Decline.
+
+### Dispatch V2 coexistence
+
+The existing `accept_offer` and `decline_offer` actions remain handled by this
+service. Actions using the separate `dispatch_v2_*` namespace are forwarded to
+`DISPATCH_V2_INTERACTIONS_URL` when both V2 bridge variables are configured.
+The Slack Interactivity Request URL does not need to change.
 
 ---
 
