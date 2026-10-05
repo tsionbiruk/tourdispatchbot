@@ -45,4 +45,3 @@ export async function forwardDispatchV2Interaction(
     `[dispatchV2Service] Forwarded ${payload.actions[0]?.action_id ?? 'unknown'} for Slack user ${payload.user.id}`
   );
 }
-  
